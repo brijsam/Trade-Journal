@@ -19,6 +19,10 @@ if (!gotLock) {
     if (win) {
       if (win.isMinimized()) win.restore();
       win.focus();
+      // Same foreground-steal as the initial launch — this is exactly the path
+      // a user hits every time they double-click an already-running instance
+      // that never made it to the front the first time.
+      app.focus({ steal: true });
     }
   });
 }
@@ -431,9 +435,20 @@ function createWindow() {
   // state — isMaximized() then reports false, and the resize handler below
   // promptly writes maximized:false back, destroying the saved preference on
   // the first run. Showing first makes the maximize stick.
+  //
+  // show() alone can leave the window created-but-not-foreground: Windows'
+  // foreground-lock timeout can deny a background process's own initial focus
+  // steal, especially right after a previous instance was killed rather than
+  // closed normally (the usual foreground-inheritance chain is broken). The
+  // window then exists — visible, enabled, correctly sized — with nothing on
+  // screen pointing at it, which reads to the user as "the app never opened".
+  // focus() + app.focus({ steal: true }) forces it, matching what a real
+  // user-initiated double-click would get automatically.
   win.once("ready-to-show", () => {
     win.show();
     if (initial.maximized) win.maximize();
+    win.focus();
+    app.focus({ steal: true });
   });
 
   win.on("resize", () => scheduleStateSave(win));
