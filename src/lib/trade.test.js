@@ -22,7 +22,7 @@ import {
   normalizeAccounts, mergeSettings, mergePreferences, clampZoom, stepZoom, paletteFilter, normalizeAccent,
   DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_BALANCE, DEFAULT_SETTINGS, DEFAULT_PREFERENCES,
   shardOf, shardKey, djb2, SHARD_COUNT, nextTradeId, tradeSeq,
-  parseCSV, csvCell, tradesToCSV, rowsToTrades, normalizeCsvDate, escapeHtml,
+  parseCSV, csvCell, tradesToCSV, rowsToTrades, normalizeCsvDate, partitionDuplicateImports, escapeHtml,
   isoDate, isoWeekKey, monthKey, weekOfMonthKey, durationLabel,
   dateInRange, dateRangeForPreset, startOfWeek, toLocalInputValue,
   emptyTrade, tradeToForm, withDerivedFills, formSignature,
@@ -766,6 +766,55 @@ describe("CSV import", () => {
   it("rejects an unparseable date instead of storing Invalid Date", () => {
     expect(normalizeCsvDate("not a date")).toBe("");
     expect(normalizeCsvDate("")).toBe("");
+  });
+});
+
+describe("partitionDuplicateImports", () => {
+  const existing = [
+    { symbol: "EURUSD", entryDateTime: "2026-07-10T09:00" },
+    { symbol: "BTCUSDT", entryDateTime: "2026-07-11T14:30" },
+  ];
+
+  it("flags an incoming row matching an existing trade's symbol and entry time", () => {
+    const { fresh, duplicates } = partitionDuplicateImports(existing, [
+      { symbol: "EURUSD", entryDateTime: "2026-07-10T09:00" },
+      { symbol: "EURUSD", entryDateTime: "2026-07-10T10:00" },
+    ]);
+    expect(duplicates).toHaveLength(1);
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0].entryDateTime).toBe("2026-07-10T10:00");
+  });
+
+  it("matches symbols case-insensitively and ignores surrounding whitespace", () => {
+    const { duplicates } = partitionDuplicateImports(existing, [
+      { symbol: " eurusd ", entryDateTime: "2026-07-10T09:00" },
+    ]);
+    expect(duplicates).toHaveLength(1);
+  });
+
+  it("never calls a dateless row a duplicate — missing halves match nothing", () => {
+    const noDate = [{ symbol: "EURUSD", entryDateTime: "" }];
+    const { fresh, duplicates } = partitionDuplicateImports(
+      [...existing, { symbol: "EURUSD", entryDateTime: "" }],
+      noDate
+    );
+    expect(duplicates).toHaveLength(0);
+    expect(fresh).toHaveLength(1);
+  });
+
+  it("keeps every incoming row — partitioned, not filtered", () => {
+    const incoming = [
+      { symbol: "EURUSD", entryDateTime: "2026-07-10T09:00" },
+      { symbol: "XAUUSD", entryDateTime: "2026-07-12T08:00" },
+    ];
+    const { fresh, duplicates } = partitionDuplicateImports(existing, incoming);
+    expect(fresh.length + duplicates.length).toBe(incoming.length);
+  });
+
+  it("treats an empty journal as all-fresh", () => {
+    const { fresh, duplicates } = partitionDuplicateImports([], [{ symbol: "X", entryDateTime: "2026-01-01T00:00" }]);
+    expect(fresh).toHaveLength(1);
+    expect(duplicates).toHaveLength(0);
   });
 });
 

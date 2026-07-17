@@ -212,7 +212,9 @@ Fonts (Inter, Space Grotesk, JetBrains Mono) are self-hosted via `@fontsource` i
 - **PDF** — desktop renders the report HTML in an offscreen `BrowserWindow` and calls `printToPDF` (a real PDF). Web writes the HTML into an offscreen iframe and opens the print dialog, where the user picks "Save as PDF".
 - **Excel** — `xlsx` is imported on demand *inside* the exporter, not at module scope, so it stays out of the main bundle.
 - **HTML / Word** — all free text goes through `escapeHtml()`. Symbols, strategy names and notes are user input; interpolated raw they break the document or inject tags.
-- **CSV** — `tradesToCSV` / `parseCSV` are a matched pair: the quoting `csvCell` writes is exactly what `parseCSV` reads back.
+- **CSV** — `tradesToCSV` / `parseCSV` are a matched pair: the quoting `csvCell` writes is exactly what `parseCSV` reads back. On import, `partitionDuplicateImports()` splits incoming rows against the journal by symbol + entry time; rows that match an existing trade (a statement imported twice) go to a choice dialog instead of landing silently, and rows dropped for having no symbol or entry price are counted in the result message rather than vanishing.
+
+Restoring a JSON backup is gated behind a confirmation showing both journals' trade counts — it replaces everything, same blast radius as Clear All. The backup export itself goes through `saveTextExport` like every other file, so the desktop build gets its native Save As.
 
 ## Electron shell
 

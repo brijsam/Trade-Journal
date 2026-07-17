@@ -31,7 +31,7 @@ import {
   weekOfMonthLabel, weekOfMonthKey, toLocalInputValue, parseLocalInputValue,
   normalizeAccounts, mergeSettings, mergePreferences, clampZoom, stepZoom, startOfWeek, dateRangeForPreset, dateInRange,
   groupPerformance, goalProgress, computeTrade, aggregateLegs, stripComputed,
-  escapeHtml, tradesToCSV, parseCSV, rowsToTrades, paletteFilter, normalizeAccent,
+  escapeHtml, tradesToCSV, parseCSV, rowsToTrades, partitionDuplicateImports, paletteFilter, normalizeAccent,
   summarize, equityCurve, maxDrawdown, consecutiveStreaks, sharpeSortino,
   emptyTrade, emptyLeg, withDerivedFills, tradeToForm, formSignature,
 } from "./lib/trade";
@@ -2822,6 +2822,11 @@ function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, s
   const [showStrategyMgr, setShowStrategyMgr] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [deleteAccount, setDeleteAccount] = useState(null);
+  // A CSV whose rows partly match existing trades waits here for the user to
+  // choose (import new only / all / cancel); a parsed backup waits here for the
+  // replace-everything confirmation. Neither touches the journal until then.
+  const [pendingImport, setPendingImport] = useState(null);
+  const [pendingRestore, setPendingRestore] = useState(null);
   const [ruleInput, setRuleInput] = useState("");
   const withShots = trades.filter((t) => (t.screenshotCount || 0) > 0).length;
   const goals = { ...DEFAULT_GOALS, ...(settings.goals || {}) };
@@ -2871,6 +2876,13 @@ function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, s
       : `Deleted ${gone?.name}.`);
   };
 
+  // "Skipped" rows are the ones rowsToTrades drops for having no symbol or no
+  // entry price — the user deserves to know their statement wasn't fully read,
+  // not just how much of it was.
+  const importSummary = (count, skipped) =>
+    `Imported ${count} trade${count === 1 ? "" : "s"} from CSV.` +
+    (skipped ? ` Skipped ${skipped} row${skipped === 1 ? "" : "s"} with no symbol or entry price.` : "");
+
   const importCsv = (file) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -2878,8 +2890,13 @@ function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, s
         const rows = parseCSV(reader.result);
         const newTrades = rowsToTrades(rows, { accountId: activeAccountId || accounts[0].id });
         if (!newTrades.length) { setMsg("No recognizable trade rows found in that CSV."); return; }
+        const skipped = rows.length - newTrades.length;
+        // Rows matching an existing trade's symbol + entry time are usually a
+        // statement being imported twice. Nothing lands until the user picks.
+        const { fresh, duplicates } = partitionDuplicateImports(trades, newTrades);
+        if (duplicates.length) { setPendingImport({ all: newTrades, fresh, duplicates, skipped }); return; }
         onImportTrades(newTrades);
-        setMsg(`Imported ${newTrades.length} trade${newTrades.length === 1 ? "" : "s"} from CSV.`);
+        setMsg(importSummary(newTrades.length, skipped));
       } catch (e) { setMsg("Could not read CSV file: " + e.message); }
     };
     reader.readAsText(file);
@@ -2898,18 +2915,24 @@ function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, s
     // version 3 adds accounts, fill legs and the commission/swap split. Older
     // backups restore fine — mergeSettings and computeTrade both fall back.
     const payload = { app: APP_NAME, settings, strategies, trades: tradesWithShots, exportedAt: new Date().toISOString(), version: 3 };
-    downloadBlob(new Blob([JSON.stringify(payload)], { type: "application/json" }), `BrijTradeJournal_Backup_${isoDate(new Date())}.json`);
-    setMsg("Backup downloaded.");
+    // Through the shared export helper like every other file the app writes, so
+    // the desktop build gets its native Save As instead of a silent download.
+    const res = await saveTextExport(`BrijTradeJournal_Backup_${isoDate(new Date())}.json`, JSON.stringify(payload), "application/json");
+    if (res?.canceled) setMsg("");
+    else if (res?.ok) setMsg(`Backup saved${res.path ? "" : " to your downloads"}.`);
+    else setMsg(`Backup failed${res?.error ? `: ${res.error}` : ""}.`);
   };
 
+  // Parse and validate only — the journal is untouched until the user confirms
+  // the replacement in the modal below. Restoring is as destructive as Clear
+  // All, and used to happen the instant a file was picked.
   const importBackup = (file) => {
     const reader = new FileReader();
     reader.onload = () => {
       try {
         const parsed = JSON.parse(reader.result);
         if (!Array.isArray(parsed.trades)) throw new Error("Invalid backup file");
-        replaceAllData(parsed.settings || settings, parsed.trades, parsed.strategies || strategies);
-        setMsg("Backup restored successfully.");
+        setPendingRestore(parsed);
       } catch (e) { setMsg("Could not read backup file: " + e.message); }
     };
     reader.readAsText(file);
@@ -3083,6 +3106,34 @@ function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, s
             : `Delete ${deleteAccount.name}? It has no trades.`}
           onConfirm={() => removeAccount(deleteAccount.id)} onClose={() => setDeleteAccount(null)}
         />
+      )}
+      {pendingRestore && (
+        <ConfirmModal
+          title="Restore Backup" danger confirmLabel="Replace Journal"
+          message={`Replace the current journal (${trades.length} trade${trades.length === 1 ? "" : "s"}) with this backup (${pendingRestore.trades.length} trade${pendingRestore.trades.length === 1 ? "" : "s"}${pendingRestore.exportedAt ? `, exported ${fmtDate(pendingRestore.exportedAt)}` : ""})? Everything not in the backup — trades, screenshots, settings — is lost. Download a backup of the current journal first if in doubt.`}
+          onConfirm={() => { replaceAllData(pendingRestore.settings || settings, pendingRestore.trades, pendingRestore.strategies || strategies); setMsg("Backup restored successfully."); }}
+          onClose={() => setPendingRestore(null)}
+        />
+      )}
+      {pendingImport && (
+        <Modal title="Possible Duplicate Import" onClose={() => setPendingImport(null)}>
+          <p className="confirm-msg">
+            {pendingImport.duplicates.length} of {pendingImport.all.length} row{pendingImport.all.length === 1 ? "" : "s"} in this CSV match trades already in the journal (same symbol and entry time) — this looks like a statement being imported twice.
+          </p>
+          <div className="modal-footer">
+            <button className="btn btn-ghost" onClick={() => setPendingImport(null)}>Cancel</button>
+            <button
+              className="btn btn-ghost"
+              onClick={() => { onImportTrades(pendingImport.all); setMsg(importSummary(pendingImport.all.length, pendingImport.skipped)); setPendingImport(null); }}
+            >Import All {pendingImport.all.length}</button>
+            {pendingImport.fresh.length > 0 && (
+              <button
+                className="btn btn-primary"
+                onClick={() => { onImportTrades(pendingImport.fresh); setMsg(`${importSummary(pendingImport.fresh.length, pendingImport.skipped)} Left out ${pendingImport.duplicates.length} duplicate${pendingImport.duplicates.length === 1 ? "" : "s"}.`); setPendingImport(null); }}
+              >Import {pendingImport.fresh.length} New Only</button>
+            )}
+          </div>
+        </Modal>
       )}
       {showStrategyMgr && <StrategyManager strategies={strategies} setStrategies={setStrategies} onClose={() => setShowStrategyMgr(false)} />}
     </div>

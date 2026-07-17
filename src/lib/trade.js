@@ -698,6 +698,29 @@ export function rowsToTrades(rows, lastDefaults) {
   }).filter((t) => t.symbol && t.entryPrice);
 }
 
+/* A trade's identity for import de-duplication: same symbol opened at the same
+   minute. Deliberately not id-based — a re-imported broker statement has no ids
+   to match on — and null (never a match) when either half is missing, so a
+   dateless row can't collide with every other dateless row on that symbol. */
+function importDupKey(t) {
+  const symbol = String(t?.symbol || "").trim().toUpperCase();
+  const opened = String(t?.entryDateTime || "").trim();
+  return symbol && opened ? `${symbol}|${opened}` : null;
+}
+/* Split incoming rows into ones the journal has never seen and ones that match
+   an existing trade (same symbol + entry time) — the shape of a statement being
+   imported twice. The caller decides what to do with the duplicates; nothing is
+   dropped here. */
+export function partitionDuplicateImports(existing, incoming) {
+  const seen = new Set((existing || []).map(importDupKey).filter(Boolean));
+  const fresh = [], duplicates = [];
+  (incoming || []).forEach((t) => {
+    const key = importDupKey(t);
+    (key && seen.has(key) ? duplicates : fresh).push(t);
+  });
+  return { fresh, duplicates };
+}
+
 /* ============================================================================
    AGGREGATE STATS
 ============================================================================ */
