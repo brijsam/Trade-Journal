@@ -1628,6 +1628,7 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
 function ImageLightbox({ shots, startIndex, onClose }) {
   const [idx, setIdx] = useState(startIndex || 0);
   const total = shots.length;
+  const panelRef = useRef(null);
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Escape") onClose();
@@ -1637,11 +1638,31 @@ function ImageLightbox({ shots, startIndex, onClose }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [total, onClose]);
+  // Same focus trap as Modal — this was the one overlay without it, so Tab
+  // walked down into the trade-detail dialog underneath while the image stayed
+  // on top. Body scroll is already frozen by the Modal this renders inside.
+  useEffect(() => {
+    const previouslyFocused = document.activeElement;
+    if (!panelRef.current?.contains(document.activeElement)) panelRef.current?.focus();
+    const onKeyDown = (e) => {
+      if (e.key !== "Tab" || !panelRef.current) return;
+      const items = panelRef.current.querySelectorAll(FOCUSABLE);
+      if (!items.length) { e.preventDefault(); return; }
+      const first = items[0], last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (document.activeElement === last || !panelRef.current.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
+    };
+  }, []);
   const shot = shots[idx];
   if (!shot) return null;
   return (
     <div className="lightbox-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="lightbox-panel">
+      <div className="lightbox-panel" ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`Screenshot — ${shot.stage}`}>
         <div className="lightbox-header">
           <span className="stat-label">{shot.stage}{total > 1 ? ` · ${idx + 1} / ${total}` : ""}</span>
           <button className="icon-btn" onClick={onClose}><X size={18} /></button>

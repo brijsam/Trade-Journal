@@ -66,6 +66,42 @@ function keyToFile(key) {
   return path.join(storageDir, `${encodeURIComponent(key)}.json`);
 }
 
+/* AUTO-BACKUP
+   A silent snapshot of the whole storage directory into
+   userData\backups\<YYYY-MM-DD>\, taken once per local calendar day, on
+   launch. Launch, not quit: a quit-time copy races process exit, while at
+   launch the snapshot simply captures the journal as this session found it —
+   whatever a later crash or bad write does, yesterday's state survives.
+
+   The copy lands in a .tmp directory renamed into place, so a killed launch
+   can never leave a half-written folder that looks like a valid backup. Only
+   the newest KEEP_BACKUPS days are kept. Restore is manual by design: copy the
+   files back into storage\ with the app closed. Best-effort — a failure logs
+   and changes nothing. */
+const backupsDir = path.join(app.getPath("userData"), "backups");
+const KEEP_BACKUPS = 5;
+async function autoBackupStorage() {
+  try {
+    const files = (await fsp.readdir(storageDir)).filter((f) => f.endsWith(".json"));
+    if (!files.length) return;
+    const now = new Date();
+    const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const dest = path.join(backupsDir, day);
+    try { await fsp.access(dest); return; } catch { /* no snapshot today yet */ }
+    const tmp = `${dest}.tmp`;
+    await fsp.rm(tmp, { recursive: true, force: true });
+    await fsp.mkdir(tmp, { recursive: true });
+    await Promise.all(files.map((f) => fsp.copyFile(path.join(storageDir, f), path.join(tmp, f))));
+    await fsp.rename(tmp, dest);
+    const days = (await fsp.readdir(backupsDir)).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+    await Promise.all(days.slice(0, Math.max(0, days.length - KEEP_BACKUPS))
+      .map((d) => fsp.rm(path.join(backupsDir, d), { recursive: true, force: true })));
+    console.log(`Auto-backup written: backups\\${day} (${files.length} files)`);
+  } catch (err) {
+    console.error("auto-backup skipped", err);
+  }
+}
+
 /* These handlers are the renderer's only path to disk, and they run on the main
    process — the same thread that services window and IPC events. They use the
    async fs API throughout: the synchronous calls they replaced stalled the whole
@@ -412,7 +448,9 @@ function createWindow() {
 }
 
 if (gotLock) {
-  app.whenReady().then(createWindow);
+  // Backup after the window is up, not before — it copies files, and the
+  // window appearing promptly matters more than the snapshot's timing.
+  app.whenReady().then(() => { createWindow(); autoBackupStorage(); });
 
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") app.quit();
