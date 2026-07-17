@@ -57,7 +57,12 @@ export const DEFAULT_CALENDAR = { view: "monthly", cursor: "", dateFrom: "", dat
 // density is "comfortable" | "compact"; hiddenColumns holds trades-table column
 // keys the user switched off; accent is a "#rrggbb" override for the theme's
 // accent colour, "" meaning the theme's own.
-export const DEFAULT_PREFERENCES = { filters: DEFAULT_FILTERS, calendar: DEFAULT_CALENDAR, selectedTab: "dashboard", calendarView: "monthly", calendarCursor: "", dashboardLayout: "standard", dayNotes: {}, chartMode: "amount", sidebarCollapsed: false, activeAccountId: "", zoom: 1, density: "comfortable", hiddenColumns: [], accent: "" };
+// tableSort/pageSize are the trades table's sort order and rows-per-page. They
+// ride preferences so the table comes back the way it was left — it unmounts on
+// every tab switch, so component state alone forgets both.
+export const PAGE_SIZES = [25, 50, 100];
+export const DEFAULT_TABLE_SORT = { key: "entryDateTime", dir: "desc" };
+export const DEFAULT_PREFERENCES = { filters: DEFAULT_FILTERS, calendar: DEFAULT_CALENDAR, selectedTab: "dashboard", calendarView: "monthly", calendarCursor: "", dashboardLayout: "standard", dayNotes: {}, chartMode: "amount", sidebarCollapsed: false, activeAccountId: "", zoom: 1, density: "comfortable", hiddenColumns: [], accent: "", tableSort: DEFAULT_TABLE_SORT, pageSize: 50 };
 
 // A stored accent is only ever a six-digit hex colour or "the theme's own".
 // Anything else — a hand-edited backup, an old shorthand — falls back to ""
@@ -276,6 +281,14 @@ export function mergePreferences(preferences) {
     density: prefs.density === "compact" ? "compact" : "comfortable",
     hiddenColumns: Array.isArray(prefs.hiddenColumns) ? prefs.hiddenColumns.filter((k) => typeof k === "string") : [],
     accent: normalizeAccent(prefs.accent),
+    // Guaranteed shapes, whatever was stored: a junk sort key still sorts (the
+    // comparator reads undefined fields without throwing), but dir and pageSize
+    // are constrained so a hand-edited value can't wedge the table.
+    tableSort: {
+      key: typeof prefs.tableSort?.key === "string" && prefs.tableSort.key ? prefs.tableSort.key : DEFAULT_TABLE_SORT.key,
+      dir: prefs.tableSort?.dir === "asc" ? "asc" : "desc",
+    },
+    pageSize: PAGE_SIZES.includes(prefs.pageSize) ? prefs.pageSize : 50,
   };
 }
 
@@ -844,6 +857,32 @@ export function tradeToForm(trade, accounts) {
   if (!hasSplit && num(trade.fees) !== null) { f.commission = String(num(trade.fees)); f.swap = ""; }
   if (accounts?.length && !accounts.some((a) => a.id === f.accountId)) f.accountId = accounts[0].id;
   return f;
+}
+
+/* Sanity checks on a trade's price levels and times — the mistakes that save
+   fine and then quietly poison the stats: a stop on the wrong side of entry
+   computes a negative risk distance and garbage RR, a wrong-side take profit a
+   negative expected RR, an exit before the entry a "—" duration. None of these
+   is necessarily wrong (a stop moved to lock in profit sits "wrong side" on
+   purpose), so these are warnings for the form to show, never save blockers. */
+export function tradeWarnings(t) {
+  const warnings = [];
+  const entry = num(t?.entryPrice), stop = num(t?.stopLoss), tp = num(t?.takeProfit);
+  const short = t?.direction === "Short";
+  if (entry !== null && stop !== null && stop !== entry) {
+    if (!short && stop > entry) warnings.push("Stop loss is above the entry on a Long — as a protective stop it would trigger immediately.");
+    if (short && stop < entry) warnings.push("Stop loss is below the entry on a Short — as a protective stop it would trigger immediately.");
+  }
+  if (entry !== null && tp !== null && tp !== entry) {
+    if (!short && tp < entry) warnings.push("Take profit is below the entry on a Long — expected RR will be negative.");
+    if (short && tp > entry) warnings.push("Take profit is above the entry on a Short — expected RR will be negative.");
+  }
+  if (t?.entryDateTime && t?.exitDateTime) {
+    const a = new Date(t.entryDateTime).getTime();
+    const b = new Date(t.exitDateTime).getTime();
+    if (Number.isFinite(a) && Number.isFinite(b) && b < a) warnings.push("Exit time is before the entry time — duration and time-of-day charts will ignore this trade.");
+  }
+  return warnings;
 }
 
 /* Stand-in for the form's contents, used to detect unsaved edits. Screenshots

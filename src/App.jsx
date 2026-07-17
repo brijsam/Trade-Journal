@@ -33,7 +33,7 @@ import {
   groupPerformance, goalProgress, computeTrade, aggregateLegs, stripComputed,
   escapeHtml, tradesToCSV, parseCSV, rowsToTrades, partitionDuplicateImports, paletteFilter, normalizeAccent,
   summarize, equityCurve, maxDrawdown, consecutiveStreaks, sharpeSortino,
-  emptyTrade, emptyLeg, withDerivedFills, tradeToForm, formSignature,
+  emptyTrade, emptyLeg, withDerivedFills, tradeToForm, formSignature, tradeWarnings, PAGE_SIZES, DEFAULT_TABLE_SORT,
 } from "./lib/trade";
 
 /* ============================================================================
@@ -315,7 +315,9 @@ const APP_CSS = `
    .row-selected's 1px so the two states read apart when they coincide. */
 .row-cursor { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* Right-aligned strip above the table holding the column picker. */
-.table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 8px; position: relative; }
+.table-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-bottom: 8px; position: relative; }
+.page-size-picker { display: flex; align-items: center; gap: 6px; }
+.page-size-picker .input { width: auto; padding: 4px 8px; font-size: 12px; }
 .column-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 60; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,0.4); padding: 8px; min-width: 180px; }
 .column-menu-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; font-size: 12.5px; color: var(--text-secondary); cursor: pointer; }
 .column-menu-item:hover { background: var(--bg-700); color: var(--text-primary); }
@@ -379,6 +381,10 @@ const APP_CSS = `
 .form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px 16px; }
 @media (max-width: 720px) { .form-grid { grid-template-columns: 1fr; } }
 .form-error { display: flex; align-items: center; gap: 6px; color: var(--loss); font-size: 12px; margin-top: 12px; }
+/* Non-blocking sanity warnings (tradeWarnings). Amber, not red: red is for
+   errors that stop a save; these save fine and might even be intentional. */
+.form-warning { display: flex; align-items: flex-start; gap: 6px; color: #d97706; font-size: 12px; margin-top: 10px; }
+.form-warning svg { flex-shrink: 0; margin-top: 1px; }
 .form-note { font-size: 12px; color: var(--accent); margin-top: 10px; }
 .drawdown-banner { display: flex; align-items: center; gap: 8px; background: var(--loss-soft); color: var(--loss); border: 1px solid var(--loss-border); border-radius: 10px; padding: 10px 14px; font-size: 12.5px; font-weight: 600; }
 .daynote-btn { position: absolute; top: 2px; right: 2px; width: 16px; height: 16px; border-radius: 4px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; }
@@ -1005,7 +1011,9 @@ function DateTimePicker({ value, onChange, required, disabled = false }) {
   const setNow = () => { const n = new Date(); setDraft(n); setCursor(n); };
 
   const hours = Array.from({ length: 24 }, (_, i) => i);
-  const minutes = Array.from({ length: 12 }, (_, i) => i * 5);
+  // Every minute, not 5-minute steps: fills land when they land, and a stored
+  // :07 shown as :05 misreports the trade every time the picker reopens.
+  const minutes = Array.from({ length: 60 }, (_, i) => i);
 
   return (
     <div className="dt-picker" ref={ref}>
@@ -1020,7 +1028,7 @@ function DateTimePicker({ value, onChange, required, disabled = false }) {
               {hours.map((h) => <option key={h} value={h}>{pad(h)}</option>)}
             </select>
             <span className="mono">:</span>
-            <select className="input" value={Math.floor(draft.getMinutes() / 5) * 5} onChange={(e) => setMinute(parseInt(e.target.value, 10))}>
+            <select className="input" value={draft.getMinutes()} onChange={(e) => setMinute(parseInt(e.target.value, 10))}>
               {minutes.map((m) => <option key={m} value={m}>{pad(m)}</option>)}
             </select>
             <button type="button" className="btn btn-ghost dt-now-btn" onClick={setNow}>Now</button>
@@ -1102,7 +1110,7 @@ function StrategyManager({ strategies, setStrategies, onClose }) {
 ============================================================================ */
 // Exported for the component smoke tests (App.test.jsx) — App itself is still
 // the only intended consumer.
-export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrategies, lastDefaults, symbolStats = [], checklistRules = DEFAULT_CHECKLIST_RULES, accounts = DEFAULT_SETTINGS.accounts, defaultAccountId }) {
+export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrategies, lastDefaults, symbolStats = [], existingTags = [], checklistRules = DEFAULT_CHECKLIST_RULES, accounts = DEFAULT_SETTINGS.accounts, defaultAccountId }) {
   const [form, setForm] = useState(() => tradeToForm(initial || seed || emptyTrade({ ...lastDefaults, accountId: defaultAccountId || lastDefaults?.accountId }), accounts));
   const [sizeDriver, setSizeDriver] = useState(form.positionSize && !form.riskAmount ? "size" : "risk");
   // Scaled mode is a property of the trade, not a preference: a trade with legs
@@ -1152,6 +1160,9 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
   }, [form.entryPrice, form.stopLoss]);
 
   const preview = useMemo(() => computeTrade(form), [form]);
+  // Live sanity warnings — wrong-side stop/TP, exit before entry. Never block
+  // the save: a stop moved to lock in profit sits "wrong side" on purpose.
+  const warnings = useMemo(() => tradeWarnings(form), [form]);
 
   const set = (k) => (e) => {
     const v = e && e.target ? e.target.value : e;
@@ -1512,11 +1523,18 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
 
         <Field label="Tags" span>
           <div className="tag-input-row">
+            {/* datalist: the journal's existing tags surface as native
+                suggestions, so "Fomo"/"FOMO"/"fomo" don't accumulate. Tags
+                already on this trade are left out of the list. */}
             <input
               className="input" placeholder="FOMO, Revenge, Planned, News… (Enter to add)"
+              list="tag-suggestions"
               value={tagInput} onChange={(e) => setTagInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTag(tagInput); } }}
             />
+            <datalist id="tag-suggestions">
+              {existingTags.filter((tag) => !form.tags?.includes(tag)).map((tag) => <option key={tag} value={tag} />)}
+            </datalist>
             <button type="button" className="btn btn-ghost" onClick={() => addTag(tagInput)}><Plus size={13} /> Add</button>
           </div>
           {form.tags?.length > 0 && (
@@ -1575,6 +1593,7 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
         </Field>
       </div>
 
+      {warnings.map((w) => <div key={w} className="form-warning"><AlertTriangle size={14} /> {w}</div>)}
       {err && <div className="form-error"><AlertTriangle size={14} /> {err}</div>}
 
       <div className="modal-footer">
@@ -1755,7 +1774,7 @@ function FiltersBar({ filters, setFilters, assets, strategies, tags = [] }) {
   return (
     <div className="filters-bar">
       <div className="filters-row">
-        <div className="search-box"><Search size={14} /><input placeholder="Search symbol, strategy, notes…" value={searchDraft} onChange={(e) => setSearchDraft(e.target.value)} /></div>
+        <div className="search-box"><Search size={14} /><input placeholder="Search symbol, strategy, notes, tags, id…" value={searchDraft} onChange={(e) => setSearchDraft(e.target.value)} /></div>
         <button className={`btn ${filters.status === "Open" ? "btn-primary" : "btn-ghost"}`} onClick={() => setFilters((f) => ({ ...f, status: f.status === "Open" ? "" : "Open" }))}>Open Trades</button>
         <button className={`btn ${filters.status === "Closed" ? "btn-primary" : "btn-ghost"}`} onClick={() => setFilters((f) => ({ ...f, status: f.status === "Closed" ? "" : "Closed" }))}>Closed Trades</button>
         <button className={`btn ${filters.datePreset === "today" ? "btn-primary" : "btn-ghost"}`} onClick={() => applyPreset(filters.datePreset === "today" ? "" : "today")}>Today's Trades</button>
@@ -1809,9 +1828,13 @@ const TRADE_COLUMNS = [
 ];
 // Exported for the component smoke tests (App.test.jsx) — App itself is still
 // the only intended consumer.
-export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDelete, onToast, showAccount = false, hiddenColumns, onToggleColumn }) {
-  const [sortKey, setSortKey] = useState("entryDateTime");
-  const [sortDir, setSortDir] = useState("desc");
+export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDelete, onToast, showAccount = false, hiddenColumns, onToggleColumn, initialSort = DEFAULT_TABLE_SORT, onSortChange, initialPageSize = 50, onPageSizeChange }) {
+  // Sort and page size live here but seed from preferences and report changes
+  // back up — the table unmounts on every tab switch, and coming back to a
+  // reshuffled table reads as the data having changed.
+  const [sortKey, setSortKey] = useState(initialSort.key);
+  const [sortDir, setSortDir] = useState(initialSort.dir);
+  const [pageSize, setPageSize] = useState(initialPageSize);
   const [page, setPage] = useState(0);
   // One selection drives every bulk action. Compare is just the case where
   // exactly two rows are picked, so the row checkbox means the same thing
@@ -1821,7 +1844,6 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
   const [exporting, setExporting] = useState(false);
   const [colMenuOpen, setColMenuOpen] = useState(false);
   const colMenuRef = useRef(null);
-  const pageSize = 50;
   const hidden = hiddenColumns || [];
   const show = (key) => !hidden.includes(key);
   // Memoized: the keyboard-nav effect below depends on it, and the raw arrow
@@ -1875,7 +1897,7 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   // Memoized so the keyboard-nav effect's identity check means something.
-  const pageItems = useMemo(() => sorted.slice(page * pageSize, page * pageSize + pageSize), [sorted, page]);
+  const pageItems = useMemo(() => sorted.slice(page * pageSize, page * pageSize + pageSize), [sorted, page, pageSize]);
 
   /* ---- keyboard row cursor ----
      j/k or ↑/↓ walk the visible page, Enter opens the row, E edits it, X
@@ -1948,7 +1970,11 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
       <th
         className="th-sortable" title={`Sort by ${label}`}
         aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
-        onClick={() => { if (active) setSortDir((d) => (d === "asc" ? "desc" : "asc")); else { setSortKey(key); setSortDir("desc"); } }}
+        onClick={() => {
+          const next = active ? { key, dir: sortDir === "asc" ? "desc" : "asc" } : { key, dir: "desc" };
+          setSortKey(next.key); setSortDir(next.dir);
+          onSortChange?.(next);
+        }}
       >
         {label}{" "}
         {active
@@ -1966,6 +1992,15 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
         <button className="btn btn-ghost" onClick={() => setColMenuOpen((o) => !o)} aria-expanded={colMenuOpen} aria-haspopup="true">
           <Table2 size={13} /> Columns <ChevronDown size={12} />
         </button>
+        <label className="page-size-picker">
+          <span className="field-label">Rows</span>
+          <select
+            className="input" value={pageSize} aria-label="Rows per page"
+            onChange={(e) => { const n = parseInt(e.target.value, 10); setPageSize(n); setPage(0); onPageSizeChange?.(n); }}
+          >
+            {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
         {colMenuOpen && (
           <div className="column-menu" role="menu">
             {TRADE_COLUMNS.filter((c) => c.key !== "account" || showAccount).map((c) => (
@@ -3509,7 +3544,9 @@ export default function App() {
       if (filters.rrMin && (t.actualRR === null || t.actualRR < num(filters.rrMin))) return false;
       if (filters.rrMax && (t.actualRR === null || t.actualRR > num(filters.rrMax))) return false;
       if (filters.tag && !(t.tags || []).includes(filters.tag)) return false;
-      if (filters.search) { const q = filters.search.toLowerCase(); const hay = `${t.symbol} ${t.strategy} ${t.notes}`.toLowerCase(); if (!hay.includes(q)) return false; }
+      // Same breadth as the command palette's trade search — id, tags and
+      // account included, so anything findable there is findable here.
+      if (filters.search) { const q = filters.search.toLowerCase(); const hay = `${t.id} ${t.symbol} ${t.strategy} ${t.notes} ${(t.tags || []).join(" ")} ${t._accountName || ""}`.toLowerCase(); if (!hay.includes(q)) return false; }
       return true;
     });
   }, [scopedTrades, filters, dayFilter]);
@@ -3867,6 +3904,8 @@ export default function App() {
                 onView={openView} onEdit={openEdit} onDelete={deleteTrade} onCopy={openCopy} onBulkDelete={setBulkDeleteIds} onToast={pushToast}
                 hiddenColumns={preferences.hiddenColumns}
                 onToggleColumn={(key) => setPreferences((p) => ({ ...p, hiddenColumns: p.hiddenColumns.includes(key) ? p.hiddenColumns.filter((k) => k !== key) : [...p.hiddenColumns, key] }))}
+                initialSort={preferences.tableSort} onSortChange={(sort) => setPreferences((p) => ({ ...p, tableSort: sort }))}
+                initialPageSize={preferences.pageSize} onPageSizeChange={(n) => setPreferences((p) => ({ ...p, pageSize: n }))}
               />
             </div>
           ))}
@@ -3916,6 +3955,7 @@ export default function App() {
           setStrategies={setStrategies}
           lastDefaults={lastDefaults}
           symbolStats={symbolStats}
+          existingTags={allTags}
           checklistRules={settings.checklistRules}
           accounts={accounts}
           // A new trade belongs to the account being looked at. In the pooled

@@ -130,6 +130,8 @@ Deleting an account never orphans its trades — a dangling `accountId` resolves
 
 `preferences.hiddenColumns` — trades-table column keys the user switched off (see `TRADE_COLUMNS` in App.jsx; Symbol and P&L are locked on). Merged to a clean string array whatever was stored; unknown keys are harmless.
 
+`preferences.tableSort` / `preferences.pageSize` — the trades table's sort order (`{ key, dir }`) and rows-per-page (one of `PAGE_SIZES`). The table seeds its own state from these on mount and reports changes back up — it unmounts on every tab switch, and a table that comes back reshuffled reads as the data having changed. `mergePreferences` repairs a corrupt sort to the default and coerces an unknown page size back to 50.
+
 `preferences.accent` — a `#rrggbb` accent override riding every theme, `""` = the theme's own. `normalizeAccent()` guarantees the shape, so the CSS injected from it (`--accent` plus a re-derived `--accent-soft`, after `themeCss` on the same selector so it wins the tie) can't be fed junk. The preset row deliberately offers no green and no red — those mean P&L only.
 
 ### Journal branding and UI zoom

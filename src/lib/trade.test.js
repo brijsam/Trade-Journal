@@ -25,7 +25,7 @@ import {
   parseCSV, csvCell, tradesToCSV, rowsToTrades, normalizeCsvDate, partitionDuplicateImports, escapeHtml,
   isoDate, isoWeekKey, monthKey, weekOfMonthKey, durationLabel,
   dateInRange, dateRangeForPreset, startOfWeek, toLocalInputValue,
-  emptyTrade, tradeToForm, withDerivedFills, formSignature,
+  emptyTrade, tradeToForm, withDerivedFills, formSignature, tradeWarnings,
 } from "./trade";
 
 // A closed long: in at 100, out at 110, 2 units, stop 95, target 120.
@@ -505,6 +505,57 @@ describe("mergePreferences", () => {
   it("normalizes the accent override through normalizeAccent", () => {
     expect(mergePreferences({ accent: "#8B5CF6" }).accent).toBe("#8b5cf6");
     expect(mergePreferences({ accent: "red" }).accent).toBe("");
+  });
+
+  it("defaults the table sort and keeps a stored one", () => {
+    expect(mergePreferences({}).tableSort).toEqual({ key: "entryDateTime", dir: "desc" });
+    expect(mergePreferences({ tableSort: { key: "pnlAmount", dir: "asc" } }).tableSort).toEqual({ key: "pnlAmount", dir: "asc" });
+  });
+
+  it("repairs a corrupt stored table sort instead of wedging the table", () => {
+    expect(mergePreferences({ tableSort: { key: 7, dir: "sideways" } }).tableSort).toEqual({ key: "entryDateTime", dir: "desc" });
+    expect(mergePreferences({ tableSort: "garbage" }).tableSort).toEqual({ key: "entryDateTime", dir: "desc" });
+  });
+
+  it("only ever yields a known page size", () => {
+    expect(mergePreferences({}).pageSize).toBe(50);
+    expect(mergePreferences({ pageSize: 25 }).pageSize).toBe(25);
+    expect(mergePreferences({ pageSize: 100 }).pageSize).toBe(100);
+    expect(mergePreferences({ pageSize: 37 }).pageSize).toBe(50);
+    expect(mergePreferences({ pageSize: "50" }).pageSize).toBe(50);
+  });
+});
+
+describe("tradeWarnings", () => {
+  it("stays silent on a coherent long trade", () => {
+    expect(tradeWarnings({ direction: "Long", entryPrice: "100", stopLoss: "95", takeProfit: "110", entryDateTime: "2026-07-10T09:00", exitDateTime: "2026-07-10T11:00" })).toEqual([]);
+  });
+
+  it("flags a stop on the wrong side of entry, direction-aware", () => {
+    expect(tradeWarnings({ direction: "Long", entryPrice: "100", stopLoss: "105" })[0]).toMatch(/above the entry on a Long/);
+    expect(tradeWarnings({ direction: "Short", entryPrice: "100", stopLoss: "95" })[0]).toMatch(/below the entry on a Short/);
+    // The same levels on the opposite direction are fine.
+    expect(tradeWarnings({ direction: "Short", entryPrice: "100", stopLoss: "105" })).toEqual([]);
+  });
+
+  it("flags a take profit on the wrong side of entry, direction-aware", () => {
+    expect(tradeWarnings({ direction: "Long", entryPrice: "100", takeProfit: "90" })[0]).toMatch(/below the entry on a Long/);
+    expect(tradeWarnings({ direction: "Short", entryPrice: "100", takeProfit: "110" })[0]).toMatch(/above the entry on a Short/);
+  });
+
+  it("flags an exit time before the entry time", () => {
+    expect(tradeWarnings({ entryDateTime: "2026-07-10T11:00", exitDateTime: "2026-07-10T09:00" })[0]).toMatch(/before the entry time/);
+    expect(tradeWarnings({ entryDateTime: "2026-07-10T09:00", exitDateTime: "2026-07-10T09:00" })).toEqual([]);
+  });
+
+  it("says nothing about fields that are not filled in", () => {
+    expect(tradeWarnings({ direction: "Long", entryPrice: "100" })).toEqual([]);
+    expect(tradeWarnings({})).toEqual([]);
+  });
+
+  it("can carry several warnings at once", () => {
+    const w = tradeWarnings({ direction: "Long", entryPrice: "100", stopLoss: "105", takeProfit: "90", entryDateTime: "2026-07-10T11:00", exitDateTime: "2026-07-10T09:00" });
+    expect(w).toHaveLength(3);
   });
 });
 
