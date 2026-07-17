@@ -43,9 +43,11 @@ electron-builder can cross-build a Windows target from macOS/Linux via Wine, but
 
 `build/icon.ico` must exist (256×256) or the build fails.
 
-## The EPERM failure
+## The EPERM failure — resolved on this machine (2026-07-17)
 
-`npm run dist` on this machine intermittently dies with:
+A Defender real-time-protection exclusion for the repo directory was added by the machine's owner, and `npm run dist` now completes: `release\Brij Trade Journal Setup 3.0.0.exe` built clean on the first run after the exclusion. Kept below in full because the failure returns the moment the exclusion is removed (or on any machine without one).
+
+`npm run dist` on a Windows box without the exclusion intermittently dies with:
 
 ```
 EPERM: operation not permitted, rename 'release\win-unpacked.tmp' -> 'release\win-unpacked'
@@ -55,9 +57,7 @@ Windows real-time protection grabs a handle on freshly extracted Electron files 
 
 **A fresh output directory does not dodge it.** Retested with `--config.directories.output=release-vN` across four brand-new dirs — all four failed identically. Stale leftovers were never the cause; the lock lands on the newly extracted files inside `win-unpacked.tmp`. The lock is transient: `rm -rf release-vN` succeeds once the builder process fully exits. No reboot needed.
 
-**The fix is a Windows Defender real-time-protection exclusion for the repo directory.** That is a security setting the machine's owner must change themselves — Claude will not touch it. Until then, no installer can be produced here.
-
-Last good installer: `release-v2\Brij Trade Journal Setup 2.0.0.exe`. `package.json` is at **3.0.0**, which has never been built.
+**The fix is a Windows Defender real-time-protection exclusion for the repo directory.** That is a security setting the machine's owner must change themselves — Claude will not touch it.
 
 ## Where user data lives
 

@@ -6,21 +6,19 @@ Fixing one means deleting nothing: the test turns green on its own.
 
 ---
 
-## 1. `npm run dist` fails with EPERM on this machine
+*(none currently open)*
 
-**Severity: blocks Windows releases.** Not test-covered — it is an environment problem.
+---
+
+## Fixed
+
+### `npm run dist` failed with EPERM on this machine *(was #1)*
 
 ```
 EPERM: operation not permitted, rename 'release\win-unpacked.tmp' -> 'release\win-unpacked'
 ```
 
-Windows real-time protection holds a handle on freshly extracted Electron files during the temp→final rename. A fresh output directory does **not** dodge it (retested — v5 through v8 all failed with brand-new dirs). The lock is transient: the directory deletes fine once the builder process exits.
-
-**Fix:** a Windows Defender real-time-protection exclusion for the repo directory. That is a security setting the machine's owner must change themselves — Claude will not make it. Until then no installer can be built here; the last good one is `release-v2\Brij Trade Journal Setup 2.0.0.exe`, while package.json is at 3.0.0.
-
----
-
-## Fixed
+Windows real-time protection held a handle on freshly extracted Electron files during the temp→final rename; a fresh output directory did **not** dodge it (retested — v5 through v8 all failed with brand-new dirs). Resolved 2026-07-17: the machine's owner added a Defender real-time-protection exclusion for the repo directory, and `Brij Trade Journal Setup 3.0.0.exe` built clean on the next run. The trap: this is an environment fix, not a code fix — remove the exclusion (or build on another machine without one) and the failure comes straight back. Full diagnosis in [RELEASING.md § The EPERM failure](RELEASING.md#the-eperm-failure--resolved-on-this-machine-2026-07-17).
 
 Kept here because each one is a trap that can be walked back into. The tests that pinned them are still in the suite — untagged now, as ordinary regression guards.
 
