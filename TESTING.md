@@ -19,7 +19,7 @@ One trap found writing the component tests: the `DateTimePicker` renders inside 
 ## Expected result
 
 ```
-Tests  170 passed (170)
+Tests  191 passed (191)
 ```
 
 **A fully green run is the expected state.** No `BUG:`-tagged tests are outstanding — the last one (the CSV fee round trip) went green when the defect was fixed and lost its tag. Any failure is a real regression.
@@ -46,6 +46,10 @@ The `BUG:` convention stays: a test tagged `BUG:` asserts what the code *should*
 | Form | `tradeToForm` repairs, `withDerivedFills` mirroring, `formSignature` dirty-checking |
 | Dates | duration, ISO week/month keys, ranges, presets |
 | Day keys | `isoDate` answers the **local** day — early-morning trades, local midnight, calendar cell keys, preset boundaries |
+| Journal timezone | `zonedNow` reads another zone's wall clock (EST and EDT), lands "today" on the journal zone's day when it differs from the machine's, `""`/unknown ids fall back to the machine, `mergeSettings` defaults pre-timezone journals to `""` and drops invalid ids; `tzOffsetLabel` tracks DST and half-hour offsets |
+| Daily journal | `journalEntries` orders newest first and drops blanks/non-day keys; markdown headings carry the day's trade count and P&L; a multi-line note round-trips through CSV quoting |
+| Strategy playbook | `strategyNotes` normalized to a map of non-blank strings, junk shapes to `{}`, notes length-capped |
+| Clock format | `clockFormat` constrained to `12h`/`24h`, `12h` the legacy default |
 | Trade ids | high-water counter: a deleted trade's number is never reissued, the counter can't fall behind the journal |
 
 The React shell (`App.jsx`), the charts and the Electron layer have no automated tests. Verify those by driving the app.

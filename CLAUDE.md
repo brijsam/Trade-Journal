@@ -23,7 +23,7 @@ npx vitest run -t "aggregateLegs"   # single test or describe block, by name
 
 Verification for any change is `npm run lint` + `npm test`, plus driving the app when the change is visual (`.claude/launch.json` defines the dev server as "Trading Journal Dev" on port 5173).
 
-**`npm test` is expected to be fully green (170 passed).** No `BUG:`-tagged known-failing tests are outstanding — the CSV fee round-trip defect that used to hold the count at 1 failure is fixed. If a future defect lands a new `BUG:` test, [TESTING.md](TESTING.md) and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) carry the expected count; a `BUG:` test must never be made green by rewriting its expectation. Any failure today is a real regression.
+**`npm test` is expected to be fully green (191 passed).** No `BUG:`-tagged known-failing tests are outstanding — the CSV fee round-trip defect that used to hold the count at 1 failure is fixed. If a future defect lands a new `BUG:` test, [TESTING.md](TESTING.md) and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) carry the expected count; a `BUG:` test must never be made green by rewriting its expectation. Any failure today is a real regression.
 
 ## Layout
 
@@ -72,6 +72,9 @@ Journals written by 2.x are still on disk. Every v3 field is additive with a fal
 - **Accounts** — `settings.accounts[]`. Pre-v3 journals have only `settings.startingBalance` and trades with no `accountId`; `normalizeAccounts()` folds that into one account whose id is literally `acct-main` (`DEFAULT_ACCOUNT_ID`), which legacy trades resolve to. `settings.startingBalance` is still written, mirroring `accounts[0]`, purely so a 2.x build can read a v3 journal. An unknown/dangling `accountId` always resolves to `accounts[0]`, so deleting an account never orphans its trades.
 - **Fill legs** — optional `entries[]`/`exits[]`. `aggregateLegs()` returns the size-weighted average, and legs outrank `entryPrice`/`exitPrice`/`positionSize`. The form mirrors the aggregate back onto those flat fields so leg-unaware code still sees a coherent trade. P&L uses matched qty = `min(entryQty, exitQty)`; the remainder is `_openQty`.
 - **Fee split** — `commission` + `swap`, with `fees` remaining the total of record, rewritten on save. Either split field present means the total is their sum; neither means `fees` is the total (pre-split journal or CSV import).
+- **Journal timezone** — `settings.timezone` (IANA id, `""` = follow the machine = pre-v3.2 behaviour). Moves **only "now"** (today keys, presets, calendar highlight, clock, picker prefill) via `zonedNow()`; stored trade times are naive wall-clock strings and are never shifted. Reaches leaf components via `TimezoneContext` in App.jsx, whose `""` default keeps provider-less component tests on legacy behaviour. `tzOffsetLabel()` renders the live GMT offset (DST-aware) on the picker's options and the topbar clock. See [ARCHITECTURE.md](ARCHITECTURE.md#the-journal-timezone).
+- **Daily journal** — `preferences.dayNotes`, one map keyed by the local day key. The Journal tab and the calendar's day notes edit the **same map**; there is no second store and nothing to sync. Exported via `journalEntries` / `journalToMarkdown` / `journalToCSV` (newest first, blanks and non-day keys dropped).
+- **Strategy playbook** — `settings.strategyNotes`, name → free text, normalized by `normalizeStrategyNotes` (plain string map, blanks dropped, 5000-char cap). A note deliberately survives its strategy being renamed or removed — the name coming back finds it intact.
 
 Each of these is pinned by tests in `trade.test.js`. If a test named for a legacy fallback goes red, a real journal on disk just stopped loading correctly — do not delete the test.
 
@@ -89,7 +92,7 @@ Every `Bar`, `Pie` and `Area` in `Charts.jsx` sets `isAnimationActive={false}`, 
 
 ### Exports
 
-`saveTextExport` / `saveBinaryExport` (App.jsx) hide the desktop/web split: Electron gets a native Save As via `window.desktopExport`, the web build downloads a blob. PDF is real `printToPDF` in an offscreen window on desktop, and an offscreen-iframe print dialog on web. All free text going into HTML/Word reports goes through `escapeHtml()`. `xlsx` is imported on demand inside the Excel exporter, not at module scope.
+`saveTextExport` / `saveBinaryExport` (App.jsx) hide the desktop/web split: Electron gets a native Save As via `window.desktopExport`, the web build downloads a blob. PDF is real `printToPDF` in an offscreen window on desktop, and an offscreen-iframe print dialog on web. All free text going into HTML/Word reports goes through `escapeHtml()`. `xlsx` is imported on demand inside the Excel exporter, not at module scope. It installs from a `cdn.sheetjs.com` tarball URL, not the npm registry (abandoned at 0.18.5 with open advisories) — never revert it to a semver range; see [KNOWN_ISSUES.md](KNOWN_ISSUES.md) non-issues.
 
 ## Release / packaging rules
 

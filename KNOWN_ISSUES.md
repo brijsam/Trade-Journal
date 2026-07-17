@@ -36,6 +36,10 @@ It is now formatted from local parts. `endOfDayIso` went with it: its only job w
 
 `preferences.dayNotes` was **not** migrated. Notes under an old UTC key stay where they were written; a key alone doesn't reveal which scheme wrote it, so a blind shift would mis-file the notes that were already correct. The journal on this machine had no notes.
 
+### The restored calendar cursor sat one day behind its key west of UTC *(found in passing)*
+
+`preferences.calendarCursor` stores a bare day key (`"2026-07-17"`), and the calendar restored it with `new Date(key)` — which the Date constructor parses as **UTC midnight**. West of the meridian that instant is still the evening of the 16th, so the daily view reopened on the wrong day, one behind its own key. East of UTC it happened to work, which is why the IST-pinned suite never caught it. It now restores through `parseLocalInputValue`, which reads the key as local midnight. Found while wiring the journal timezone setting (v3.2); the trap is the same one `isoDate` documents — a bare date string through `new Date()` is UTC, not local.
+
 ### The dashboard obeyed the Trades-tab filter *(reported separately)*
 
 `<DashboardPanel trades={filtered}>` while the ticker directly above it used `scopedTrades`. Setting "Open Trades" on the Trades tab and walking to the Dashboard showed $0.00 and 0 trades under a ticker still reading the real balance — indistinguishable from data loss, with no filter control on that screen to explain it. The dashboard now takes `scopedTrades`.
@@ -50,6 +54,7 @@ Analytics still takes `filtered` **on purpose** — it is the deep-dive panel. R
 
 ## Non-issues, recorded so they aren't "fixed" again
 
+- **`xlsx` resolves to a `cdn.sheetjs.com` tarball URL, not a semver range** — deliberate. The npm registry package is abandoned at 0.18.5 with two unfixed high advisories (prototype pollution + ReDoS, both parse-side; this app only writes). SheetJS publishes fixed builds only through its own CDN, so `"xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"` is the correct form. `npm update` will never bump it — upgrade by installing the next `https://cdn.sheetjs.com/xlsx-<ver>/xlsx-<ver>.tgz`. Reverting to `^0.18.5` reintroduces the `npm audit` failure.
 - **`storage.get(META_KEY, false)`** — App.jsx passes a second argument that `storage.js` ignores. Dead but harmless, many call sites.
 - **`settings.startingBalance`** — mirrored from `accounts[0]` and read by nothing in v3. It exists so a 2.x build can still read a v3 journal. Removing it strands users who roll back.
 - ~~**`release/`, `release-v2..v4/` are committed**~~ — resolved: `.gitignore` now covers `release/` and `release-*/`, and the staged installer binaries were removed from the git index before the first commit (working copies untouched). See [RELEASING.md § Repo hygiene](RELEASING.md#repo-hygiene).

@@ -44,7 +44,7 @@ export const DEFAULT_ACCOUNT_BALANCE = 10000;
 // title, report headers). "" means "use the built-in name" — the default is the
 // empty string rather than the product name so a journal that never set one
 // keeps tracking whatever the build calls itself.
-export const DEFAULT_SETTINGS = { startingBalance: DEFAULT_ACCOUNT_BALANCE, accounts: [{ id: DEFAULT_ACCOUNT_ID, name: "Main Account", broker: "", startingBalance: DEFAULT_ACCOUNT_BALANCE }], profileImage: null, journalName: "", journalTagline: "", goals: DEFAULT_GOALS, checklistRules: DEFAULT_CHECKLIST_RULES };
+export const DEFAULT_SETTINGS = { startingBalance: DEFAULT_ACCOUNT_BALANCE, accounts: [{ id: DEFAULT_ACCOUNT_ID, name: "Main Account", broker: "", startingBalance: DEFAULT_ACCOUNT_BALANCE }], profileImage: null, journalName: "", journalTagline: "", timezone: "", strategyNotes: {}, goals: DEFAULT_GOALS, checklistRules: DEFAULT_CHECKLIST_RULES };
 export const DEFAULT_FILTERS = { status: "", datePreset: "", dateFrom: "", dateTo: "", asset: "", marketType: "", direction: "", strategy: "", result: "", rrMin: "", rrMax: "", search: "", tag: "" };
 export const DEFAULT_CALENDAR = { view: "monthly", cursor: "", dateFrom: "", dateTo: "" };
 // Window size/position now live with the desktop shell (electron/main.cjs
@@ -62,7 +62,7 @@ export const DEFAULT_CALENDAR = { view: "monthly", cursor: "", dateFrom: "", dat
 // every tab switch, so component state alone forgets both.
 export const PAGE_SIZES = [25, 50, 100];
 export const DEFAULT_TABLE_SORT = { key: "entryDateTime", dir: "desc" };
-export const DEFAULT_PREFERENCES = { filters: DEFAULT_FILTERS, calendar: DEFAULT_CALENDAR, selectedTab: "dashboard", calendarView: "monthly", calendarCursor: "", dashboardLayout: "standard", dayNotes: {}, chartMode: "amount", sidebarCollapsed: false, activeAccountId: "", zoom: 1, density: "comfortable", hiddenColumns: [], accent: "", tableSort: DEFAULT_TABLE_SORT, pageSize: 50 };
+export const DEFAULT_PREFERENCES = { filters: DEFAULT_FILTERS, calendar: DEFAULT_CALENDAR, selectedTab: "dashboard", calendarView: "monthly", calendarCursor: "", dashboardLayout: "standard", dayNotes: {}, chartMode: "amount", sidebarCollapsed: false, activeAccountId: "", zoom: 1, density: "comfortable", hiddenColumns: [], accent: "", tableSort: DEFAULT_TABLE_SORT, pageSize: 50, clockFormat: "12h" };
 
 // A stored accent is only ever a six-digit hex colour or "the theme's own".
 // Anything else — a hand-edited backup, an old shorthand — falls back to ""
@@ -229,6 +229,40 @@ export function parseLocalInputValue(str) {
   const [hh, mm] = (timePart || "00:00").split(":").map(Number);
   return new Date(y, (m || 1) - 1, d || 1, hh || 0, mm || 0);
 }
+/* ---- Journal timezone ----------------------------------------------------
+   settings.timezone ("" = follow the machine) moves only "now": today's day
+   key, the date presets, the calendar's today highlight, the clock and the
+   picker's prefill. Stored trade times are naive wall-clock strings and are
+   never shifted — what the user typed is what every zone shows. */
+export function isValidTimeZone(tz) {
+  if (typeof tz !== "string" || !tz) return false;
+  try { new Intl.DateTimeFormat("en-US", { timeZone: tz }); return true; } catch { return false; }
+}
+export function normalizeTimezone(tz) { return isValidTimeZone(tz) ? tz : ""; }
+// Current wall-clock time in tz, returned as a naive local-parts Date so
+// isoDate / dateRangeForPreset / toLocalInputValue keep working on it
+// unchanged. `at` is injectable for tests; milliseconds are dropped.
+export function zonedNow(tz, at = new Date()) {
+  if (!isValidTimeZone(tz)) return new Date(at);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz, hourCycle: "h23",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(at);
+  const get = (type) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  return new Date(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+}
+// "GMT+5:30" / "GMT-4" for a zone's offset at `at` — DST means the answer for
+// one zone changes through the year, which is why this reads a live instant
+// instead of a lookup table. Derived from zonedNow so the two can't disagree.
+export function tzOffsetLabel(tz, at = new Date()) {
+  if (!isValidTimeZone(tz)) return "";
+  const utcNaive = new Date(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate(), at.getUTCHours(), at.getUTCMinutes(), at.getUTCSeconds());
+  const mins = Math.round((zonedNow(tz, at) - utcNaive) / 60000);
+  const abs = Math.abs(mins);
+  const rem = abs % 60;
+  return `GMT${mins < 0 ? "-" : "+"}${Math.floor(abs / 60)}${rem ? `:${pad(rem)}` : ""}`;
+}
 /* Coerce whatever is on file into a usable account list. Anything that reaches
    here can be from a journal older than accounts, a hand-edited backup, or a
    restore — so the one guarantee it makes is that the result is never empty and
@@ -254,6 +288,19 @@ function cleanBrandText(value, maxLen) {
   if (typeof value !== "string") return "";
   return value.trim().slice(0, maxLen);
 }
+/* Strategy playbook notes, keyed by strategy name. Notes are text the user
+   typed, so the only jobs here are shape (a plain object of strings), dropping
+   entries whose note is blank, and a length cap so a stray paste can't bloat
+   the meta record. A note whose strategy was renamed or removed is kept — the
+   name coming back (or a trade still carrying it) finds its notes intact. */
+export function normalizeStrategyNotes(notes) {
+  if (!notes || typeof notes !== "object" || Array.isArray(notes)) return {};
+  const out = {};
+  for (const [name, text] of Object.entries(notes)) {
+    if (typeof text === "string" && text.trim()) out[name] = text.slice(0, 5000);
+  }
+  return out;
+}
 export function mergeSettings(settings) {
   const s = settings || {};
   const accounts = normalizeAccounts(s.accounts, s.startingBalance);
@@ -265,6 +312,10 @@ export function mergeSettings(settings) {
     startingBalance: accounts[0].startingBalance,
     journalName: cleanBrandText(s.journalName, 40),
     journalTagline: cleanBrandText(s.journalTagline, 60),
+    // An unknown or malformed zone falls back to "" (follow the machine), so a
+    // journal restored on a runtime with an older tz database still loads.
+    timezone: normalizeTimezone(s.timezone),
+    strategyNotes: normalizeStrategyNotes(s.strategyNotes),
     goals: { ...DEFAULT_GOALS, ...(s.goals || {}) },
     checklistRules: s.checklistRules?.length ? s.checklistRules : DEFAULT_CHECKLIST_RULES,
   };
@@ -279,6 +330,7 @@ export function mergePreferences(preferences) {
     dayNotes: prefs.dayNotes || {},
     zoom: clampZoom(prefs.zoom ?? 1),
     density: prefs.density === "compact" ? "compact" : "comfortable",
+    clockFormat: prefs.clockFormat === "24h" ? "24h" : "12h",
     hiddenColumns: Array.isArray(prefs.hiddenColumns) ? prefs.hiddenColumns.filter((k) => typeof k === "string") : [],
     accent: normalizeAccent(prefs.accent),
     // Guaranteed shapes, whatever was stored: a junk sort key still sorts (the
@@ -559,6 +611,29 @@ export function escapeHtml(value) {
 
 // One CSV field: quote when it contains a comma, quote, or newline, and double
 // up embedded quotes — the same escaping parseCSV() reads back.
+/* ---- Daily journal export ------------------------------------------------
+   The journal's day notes (preferences.dayNotes, keyed by isoDate day key —
+   the same store the calendar edits). Entries come out newest first; blank
+   notes and keys that aren't day keys (the pre-fix UTC stragglers documented
+   in ARCHITECTURE.md § Dates are still day-shaped and survive) are dropped. */
+export function journalEntries(dayNotes) {
+  return Object.entries(dayNotes || {})
+    .filter(([key, text]) => /^\d{4}-\d{2}-\d{2}$/.test(key) && typeof text === "string" && text.trim())
+    .sort((a, b) => (a[0] < b[0] ? 1 : -1));
+}
+// byDay is optional { [dayKey]: { pnl, count } } — when given, each entry's
+// heading carries that day's trading result next to the note.
+export function journalToMarkdown(dayNotes, byDay = {}) {
+  const blocks = journalEntries(dayNotes).map(([date, text]) => {
+    const info = byDay[date];
+    const stats = info ? ` — ${info.count} trade${info.count === 1 ? "" : "s"}, P&L ${info.pnl < 0 ? "-" : "+"}$${Math.abs(info.pnl).toFixed(2)}` : "";
+    return `## ${date}${stats}\n\n${text.trim()}`;
+  });
+  return `# Trading Journal\n\n${blocks.join("\n\n")}\n`;
+}
+export function journalToCSV(dayNotes) {
+  return ["Date,Note", ...journalEntries(dayNotes).map(([date, text]) => `${date},${csvCell(text.trim())}`)].join("\n");
+}
 export function csvCell(value) {
   const s = value === null || value === undefined ? "" : String(value);
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;

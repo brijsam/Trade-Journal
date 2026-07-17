@@ -25,6 +25,8 @@ import {
   parseCSV, csvCell, tradesToCSV, rowsToTrades, normalizeCsvDate, partitionDuplicateImports, escapeHtml,
   isoDate, isoWeekKey, monthKey, weekOfMonthKey, durationLabel,
   dateInRange, dateRangeForPreset, startOfWeek, toLocalInputValue,
+  zonedNow, isValidTimeZone, normalizeTimezone, tzOffsetLabel,
+  journalEntries, journalToMarkdown, journalToCSV,
   emptyTrade, tradeToForm, withDerivedFills, formSignature, tradeWarnings,
 } from "./trade";
 
@@ -431,6 +433,29 @@ describe("mergeSettings", () => {
     expect(s.startingBalance).toBe(7000);
   });
 
+  // A journal from before the timezone setting has no such key; it must load
+  // as "follow the machine", which is exactly how those journals behaved.
+  it("defaults a pre-timezone journal to the machine zone", () => {
+    expect(mergeSettings({ startingBalance: 7000 }).timezone).toBe("");
+  });
+
+  it("keeps a valid journal timezone and drops an unknown one", () => {
+    expect(mergeSettings({ timezone: "America/New_York" }).timezone).toBe("America/New_York");
+    expect(mergeSettings({ timezone: "Atlantis/Sunken" }).timezone).toBe("");
+  });
+
+  it("normalizes strategy notes to a clean map of non-blank strings", () => {
+    const s = mergeSettings({ strategyNotes: { ICT: "  liquidity sweep entry ", Empty: "   ", Num: 7 } });
+    expect(s.strategyNotes).toEqual({ ICT: "  liquidity sweep entry " });
+    expect(mergeSettings({ strategyNotes: ["not", "a", "map"] }).strategyNotes).toEqual({});
+    expect(mergeSettings({}).strategyNotes).toEqual({});
+  });
+
+  it("caps a strategy note's length", () => {
+    const s = mergeSettings({ strategyNotes: { A: "x".repeat(9000) } });
+    expect(s.strategyNotes.A.length).toBe(5000);
+  });
+
   it("fills in goals and checklist rules that a journal never had", () => {
     const s = mergeSettings({});
     expect(s.goals).toEqual(DEFAULT_SETTINGS.goals);
@@ -475,6 +500,14 @@ describe("mergePreferences", () => {
     const p = mergePreferences({ calendarView: "weekly", calendarCursor: "2026-07-16" });
     expect(p.calendar.view).toBe("weekly");
     expect(p.calendar.cursor).toBe("2026-07-16");
+  });
+
+  // Only two clock formats exist; anything else stored (or nothing) is the
+  // 12-hour clock the app has always shown.
+  it("constrains clockFormat to 12h/24h with 12h the legacy default", () => {
+    expect(mergePreferences({}).clockFormat).toBe("12h");
+    expect(mergePreferences({ clockFormat: "24h" }).clockFormat).toBe("24h");
+    expect(mergePreferences({ clockFormat: "military" }).clockFormat).toBe("12h");
   });
 
   it("backfills filters a stored preference set is missing", () => {
@@ -995,6 +1028,115 @@ describe("isoDate — local day keys", () => {
   it("keys local midnight to that same local day", () => {
     expect(isoDate(new Date(2026, 6, 16, 0, 0, 0))).toBe("2026-07-16");
     expect(isoDate(new Date(2026, 6, 16, 23, 59, 59))).toBe("2026-07-16");
+  });
+});
+
+describe("zonedNow — journal-timezone clock", () => {
+  // The suite runs at Asia/Kolkata (UTC+5:30); each expectation below reads
+  // another zone's wall clock from the same instant. Only "now" flows through
+  // this — stored trade times are naive strings and never pass through here.
+  it("reads New York's wall clock in winter (EST, UTC-5)", () => {
+    const d = zonedNow("America/New_York", new Date("2026-01-15T12:00:00Z"));
+    expect(toLocalInputValue(d)).toBe("2026-01-15T07:00");
+  });
+
+  it("follows DST — the same zone reads UTC-4 in summer", () => {
+    const d = zonedNow("America/New_York", new Date("2026-07-15T12:00:00Z"));
+    expect(toLocalInputValue(d)).toBe("2026-07-15T08:00");
+  });
+
+  // The point of the setting: at this instant the machine (IST) is already on
+  // the 16th while New York is still on the 15th. "Today", the presets and the
+  // calendar highlight must land on the journal zone's day, not the machine's.
+  it("gives a different 'today' than the machine when zones straddle midnight", () => {
+    const at = new Date("2026-01-15T20:00:00Z");   // 01:30 on the 16th in IST
+    expect(isoDate(at)).toBe("2026-01-16");
+    expect(isoDate(zonedNow("America/New_York", at))).toBe("2026-01-15");
+  });
+
+  it("feeds dateRangeForPreset the journal zone's day", () => {
+    const at = new Date("2026-01-15T20:00:00Z");
+    const r = dateRangeForPreset("today", zonedNow("America/New_York", at));
+    expect(r).toMatchObject({ from: "2026-01-15", to: "2026-01-15" });
+  });
+
+  it("returns the instant unchanged for the machine zone sentinel \"\"", () => {
+    const at = new Date("2026-07-15T12:00:00Z");
+    expect(zonedNow("", at).getTime()).toBe(at.getTime());
+  });
+
+  it("falls back to the machine zone on an unknown zone id", () => {
+    const at = new Date("2026-07-15T12:00:00Z");
+    expect(zonedNow("Not/AZone", at).getTime()).toBe(at.getTime());
+  });
+
+  it("agrees with the machine's own wall clock for the machine's zone", () => {
+    const at = new Date("2026-07-15T12:00:00Z");
+    expect(toLocalInputValue(zonedNow("Asia/Kolkata", at))).toBe(toLocalInputValue(at));
+  });
+});
+
+describe("tzOffsetLabel", () => {
+  it("labels a zone with its GMT offset, tracking DST", () => {
+    expect(tzOffsetLabel("America/New_York", new Date("2026-01-15T12:00:00Z"))).toBe("GMT-5");
+    expect(tzOffsetLabel("America/New_York", new Date("2026-07-15T12:00:00Z"))).toBe("GMT-4");
+  });
+
+  it("carries half-hour offsets", () => {
+    expect(tzOffsetLabel("Asia/Kolkata", new Date("2026-07-15T12:00:00Z"))).toBe("GMT+5:30");
+  });
+
+  it("returns empty for an unknown zone", () => {
+    expect(tzOffsetLabel("Not/AZone")).toBe("");
+  });
+});
+
+describe("isValidTimeZone / normalizeTimezone", () => {
+  it("accepts a real IANA id and rejects junk", () => {
+    expect(isValidTimeZone("America/New_York")).toBe(true);
+    expect(isValidTimeZone("Not/AZone")).toBe(false);
+    expect(isValidTimeZone("")).toBe(false);
+    expect(isValidTimeZone(null)).toBe(false);
+  });
+
+  it("normalizes anything invalid to the machine sentinel \"\"", () => {
+    expect(normalizeTimezone("Europe/London")).toBe("Europe/London");
+    expect(normalizeTimezone("Mars/Olympus_Mons")).toBe("");
+    expect(normalizeTimezone(42)).toBe("");
+  });
+});
+
+describe("daily journal export", () => {
+  const notes = {
+    "2026-07-15": "Choppy morning, stood aside.",
+    "2026-07-17": "Clean trend day.\nTook both setups.",
+    "2026-07-16": "   ",              // blank — never exported
+    "junk-key": "not a day note",
+  };
+
+  it("orders entries newest first and drops blanks and non-day keys", () => {
+    expect(journalEntries(notes).map(([d]) => d)).toEqual(["2026-07-17", "2026-07-15"]);
+  });
+
+  it("renders markdown with a day's trading result on the heading", () => {
+    const md = journalToMarkdown(notes, { "2026-07-17": { pnl: 150, count: 2 }, "2026-07-15": { pnl: -25.5, count: 1 } });
+    expect(md).toContain("## 2026-07-17 — 2 trades, P&L +$150.00");
+    expect(md).toContain("## 2026-07-15 — 1 trade, P&L -$25.50");
+    expect(md.indexOf("2026-07-17")).toBeLessThan(md.indexOf("2026-07-15"));
+    expect(md).not.toContain("junk-key");
+  });
+
+  it("leaves the heading bare for a day with no trades", () => {
+    expect(journalToMarkdown({ "2026-07-15": "note" })).toContain("## 2026-07-15\n");
+  });
+
+  // A multi-line note must survive the CSV round trip — same quoting rules
+  // as the trade export, so parseCSV reads it back intact.
+  it("round-trips a multi-line note through CSV quoting", () => {
+    const csv = journalToCSV(notes);
+    const rows = parseCSV(csv);
+    expect(rows[0]).toEqual({ Date: "2026-07-17", Note: "Clean trend day.\nTook both setups." });
+    expect(rows).toHaveLength(2);
   });
 });
 

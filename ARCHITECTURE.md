@@ -171,6 +171,22 @@ Because the key ignores time-of-day, a day is bounded by its local midnight and 
 
 `toLocalInputValue` / `parseLocalInputValue` bridge Date and the form's `datetime-local` input, and are local throughout.
 
+### The journal timezone
+
+`settings.timezone` (an IANA id; `""` = follow the machine, the default and the pre-v3.2 behaviour) moves **only "now"**: the dashboard's Today/This Week/This Month keys, `dateRangeForPreset`'s presets, the calendar's today highlight, the topbar clock, the date picker's prefill and Now button, and export file stamps. `zonedNow(tz, at)` in `lib/trade.js` is the single bridge — it reads `at`'s wall clock in `tz` via `Intl.DateTimeFormat` and returns it as a naive local-parts Date, so `isoDate`, the presets and the picker keep working unchanged on what it returns.
+
+> Stored trade times are naive wall-clock strings and are **never shifted** — what the user typed is what every zone shows. That asymmetry is the design: a trader journalling the New York session types NY times, and the setting makes "today" agree with those times instead of the machine's clock. Changing the zone must never rewrite or re-bucket an existing trade; there is deliberately no conversion step anywhere.
+
+The setting reaches leaf components through `TimezoneContext` in App.jsx (default `""`), not props — and that default is load-bearing: the component tests render `TradeForm`/`TradesTable` without the provider and get legacy machine-zone behaviour. An unknown zone id (a journal restored onto a runtime with an older tz database) normalizes to `""` in `mergeSettings` rather than failing the load.
+
+`tzOffsetLabel(tz, at)` renders a zone's live GMT offset (`GMT+5:30`, `GMT-4`) — derived from `zonedNow` so the two can never disagree, and "now"-relative because DST moves it through the year. It labels every option in the Settings picker and marks the topbar clock whenever the journal is pinned to a zone, so a clock that disagrees with the machine's taskbar explains itself. The clock itself renders 12- or 24-hour from `preferences.clockFormat` (`"12h"` legacy default, constrained in `mergePreferences`).
+
+### The daily journal
+
+`preferences.dayNotes` is one map, day key → note text. The Journal tab and the calendar's day-note editor write the **same map** — "sync" between them is that there is nothing to sync. Deleting an entry stores `""`, which every reader (`journalEntries`, the calendar cell) treats as absent. Exports (`journalToMarkdown` with per-day trade stats, `journalToCSV` with the same quoting `parseCSV` reads back) order newest first and drop blanks and non-day-shaped keys.
+
+`settings.strategyNotes` (the Strategy Playbook panel in Settings) is a name → text map through `normalizeStrategyNotes`: blanks dropped, 5000-char cap. Notes are keyed by strategy *name*, and a note whose strategy is renamed or removed is deliberately kept — StrategyManager can't rewrite settings from every mount point, and the cheap failure mode (an orphaned note waiting for its name to come back) beats the expensive one (a rename silently destroying a playbook page).
+
 **`preferences.dayNotes` is keyed by this same day key.** Notes written before the key became local sit under the old UTC day; they were not migrated, because a key alone doesn't say which scheme wrote it (the monthly grid used a local key even then, the weekly grid a UTC one, so a blind shift would mis-file the ones that were already right). A note that was mis-filed under the old key stays where it was written.
 
 ## Trade ids

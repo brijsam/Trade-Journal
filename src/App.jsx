@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense, createContext, useContext } from "react";
 // flushSync only wraps tab-switch state updates inside document.startViewTransition,
 // which needs the DOM updated synchronously inside its callback to snapshot it.
 import { flushSync } from "react-dom";
@@ -13,7 +13,7 @@ import {
   DollarSign, Percent, Target, Activity, Award,
   AlertTriangle, Save, RotateCcw, Flame, Snowflake, ChevronLeft, ChevronRight,
   FileSpreadsheet, FileText, Database, ShieldCheck, Calculator, Plus, Check, Loader2,
-  Copy, ListPlus, ArrowLeft, ArrowRight, PanelLeftClose, PanelLeftOpen, Layers, Wallet, Keyboard, Table2
+  Copy, ListPlus, ArrowLeft, ArrowRight, PanelLeftClose, PanelLeftOpen, Layers, Wallet, Keyboard, Table2, BookOpen
 } from "lucide-react";
 import { storage } from "./lib/storage";
 import {
@@ -28,13 +28,28 @@ import {
   DEFAULT_CHECKLIST_RULES, DEFAULT_SETTINGS, DEFAULT_FILTERS, DEFAULT_PREFERENCES,
   SHARD_COUNT, META_KEY, SHARD_PREFIX, SHOTS_PREFIX, shardKey, shardOf,
   uid, nextTradeId, tradeSeq, pad, fmtDate, fmtDateTime, isoDate, isoWeekKey, monthKey, monthLabel,
-  weekOfMonthLabel, weekOfMonthKey, toLocalInputValue, parseLocalInputValue,
+  weekOfMonthLabel, weekOfMonthKey, toLocalInputValue, parseLocalInputValue, zonedNow, tzOffsetLabel,
+  journalEntries, journalToMarkdown, journalToCSV,
   normalizeAccounts, mergeSettings, mergePreferences, clampZoom, stepZoom, startOfWeek, dateRangeForPreset, dateInRange,
   groupPerformance, goalProgress, computeTrade, aggregateLegs, stripComputed,
   escapeHtml, tradesToCSV, parseCSV, rowsToTrades, partitionDuplicateImports, paletteFilter, normalizeAccent,
   summarize, equityCurve, maxDrawdown, consecutiveStreaks, sharpeSortino,
   emptyTrade, emptyLeg, withDerivedFills, tradeToForm, formSignature, tradeWarnings, PAGE_SIZES, DEFAULT_TABLE_SORT,
 } from "./lib/trade";
+
+/* ============================================================================
+   JOURNAL TIMEZONE
+   settings.timezone reaches leaf components (date picker, clock, calendar,
+   dashboard) through context rather than prop drilling. The default "" means
+   "follow the machine's zone" — it is also what the component tests get, since
+   they render without the provider, which keeps them on legacy behaviour.
+============================================================================ */
+const TimezoneContext = createContext("");
+const useJournalTz = () => useContext(TimezoneContext);
+// Full IANA list where the runtime offers it (Chromium and Node both do); the
+// try/catch keeps an older runtime at just the "System" option.
+const TIMEZONE_CHOICES = (() => { try { return Intl.supportedValuesOf("timeZone"); } catch { return []; } })();
+const SYSTEM_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 /* ============================================================================
    TRADING JOURNAL — design tokens
@@ -502,6 +517,14 @@ const APP_CSS = `
 @media (max-width: 620px) { .calendar-grid-months { grid-template-columns: repeat(2, 1fr); } }
 .calendar-cell-month { aspect-ratio: 16 / 9; cursor: default; }
 .day-focus { border: 1px solid var(--border-soft); border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+/* Daily journal tab */
+.journal-toolbar { display: flex; gap: 8px; }
+.journal-add-row { display: flex; gap: 8px; margin-bottom: 14px; max-width: 420px; }
+.journal-list { display: flex; flex-direction: column; gap: 10px; }
+.journal-entry { background: var(--bg-900); border: 1px solid var(--border-soft); border-radius: 10px; padding: 10px 12px; }
+.journal-entry-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
+.journal-entry-actions { margin-left: auto; display: flex; gap: 4px; align-items: center; }
+.journal-entry-text { white-space: pre-wrap; color: var(--text-secondary); font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
 .day-focus-head { display: flex; align-items: center; justify-content: space-between; width: 100%; margin-bottom: 4px; }
 .day-focus-pnl { font-size: 30px; font-weight: 700; }
 .day-focus-sub { font-size: 12px; color: var(--text-muted); }
@@ -959,6 +982,9 @@ function TickerStrip({ items }) {
    CUSTOM DATE & TIME PICKER — with explicit Confirm button
 ============================================================================ */
 function DTCalendar({ cursor, setCursor, selectedDate, onPick }) {
+  // One zoned read per render, not one per cell — 31 Intl lookups per paint
+  // would be pure waste for a value every cell shares.
+  const today = zonedNow(useJournalTz());
   const year = cursor.getFullYear(), month = cursor.getMonth();
   const first = new Date(year, month, 1);
   const startDow = first.getDay();
@@ -978,7 +1004,7 @@ function DTCalendar({ cursor, setCursor, selectedDate, onPick }) {
         {cells.map((d, i) => {
           if (d === null) return <span key={i} />;
           const isSel = selectedDate && selectedDate.getFullYear() === year && selectedDate.getMonth() === month && selectedDate.getDate() === d;
-          const isToday = (() => { const n = new Date(); return n.getFullYear() === year && n.getMonth() === month && n.getDate() === d; })();
+          const isToday = today.getFullYear() === year && today.getMonth() === month && today.getDate() === d;
           return <button type="button" key={i} className={`dt-day ${isSel ? "dt-day-sel" : ""} ${isToday && !isSel ? "dt-day-today" : ""}`} onClick={() => onPick(new Date(year, month, d))}>{d}</button>;
         })}
       </div>
@@ -986,9 +1012,10 @@ function DTCalendar({ cursor, setCursor, selectedDate, onPick }) {
   );
 }
 function DateTimePicker({ value, onChange, required, disabled = false }) {
+  const tz = useJournalTz();
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState(() => parseLocalInputValue(value));
-  const [cursor, setCursor] = useState(() => parseLocalInputValue(value));
+  const [draft, setDraft] = useState(() => (value ? parseLocalInputValue(value) : zonedNow(tz)));
+  const [cursor, setCursor] = useState(() => (value ? parseLocalInputValue(value) : zonedNow(tz)));
   const ref = useRef(null);
 
   useEffect(() => {
@@ -1000,7 +1027,7 @@ function DateTimePicker({ value, onChange, required, disabled = false }) {
   // Seed the draft from the committed value as the popover opens, rather than in
   // an effect keyed on `open` — same result without the extra render pass.
   const toggleOpen = () => {
-    if (!open) { const d = value ? parseLocalInputValue(value) : new Date(); setDraft(d); setCursor(d); }
+    if (!open) { const d = value ? parseLocalInputValue(value) : zonedNow(tz); setDraft(d); setCursor(d); }
     setOpen((o) => !o);
   };
 
@@ -1008,7 +1035,7 @@ function DateTimePicker({ value, onChange, required, disabled = false }) {
   const setHour = (h) => setDraft((d) => { const n = new Date(d); n.setHours(h); return n; });
   const setMinute = (m) => setDraft((d) => { const n = new Date(d); n.setMinutes(m); return n; });
   const confirm = () => { onChange(toLocalInputValue(draft)); setOpen(false); };
-  const setNow = () => { const n = new Date(); setDraft(n); setCursor(n); };
+  const setNow = () => { const n = zonedNow(tz); setDraft(n); setCursor(n); };
 
   const hours = Array.from({ length: 24 }, (_, i) => i);
   // Every minute, not 5-minute steps: fills land when they land, and a stored
@@ -1859,6 +1886,7 @@ const TRADE_COLUMNS = [
 // Exported for the component smoke tests (App.test.jsx) — App itself is still
 // the only intended consumer.
 export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDelete, onBulkEdit, onToast, accounts = [], strategies = [], showAccount = false, hiddenColumns, onToggleColumn, initialSort = DEFAULT_TABLE_SORT, onSortChange, initialPageSize = 50, onPageSizeChange }) {
+  const tz = useJournalTz();
   // Sort and page size live here but seed from preferences and report changes
   // back up — the table unmounts on every tab switch, and coming back to a
   // reshuffled table reads as the data having changed.
@@ -1981,7 +2009,7 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
   const exportSelectedCSV = async () => {
     setExporting(true);
     try {
-      const res = await saveTextExport(`BrijTradeJournal_Selected_${isoDate(new Date())}.csv`, tradesToCSV(selectedTrades), "text/csv;charset=utf-8");
+      const res = await saveTextExport(`BrijTradeJournal_Selected_${isoDate(zonedNow(tz))}.csv`, tradesToCSV(selectedTrades), "text/csv;charset=utf-8");
       if (res && !res.canceled) {
         if (res.ok) onToast?.({ message: `Exported ${selectedTrades.length} trade${selectedTrades.length > 1 ? "s" : ""}${res.path ? "" : " to your downloads"}`, tone: "profit" });
         else onToast?.({ message: `Export failed${res.error ? `: ${res.error}` : ""}`, tone: "loss" });
@@ -2163,10 +2191,14 @@ function TradeCompareModal({ trades, onClose }) {
    PERFORMANCE CALENDAR
 ============================================================================ */
 function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences }) {
+  const tz = useJournalTz();
   const [noteDate, setNoteDate] = useState(null);
   const dayNotes = preferences.dayNotes || {};
   const saveDayNote = (key, text) => setPreferences((p) => ({ ...p, dayNotes: { ...p.dayNotes, [key]: text } }));
-  const [cursor, setCursorState] = useState(() => preferences.calendarCursor ? new Date(preferences.calendarCursor) : new Date());
+  // parseLocalInputValue, not new Date(key): a bare "2026-07-17" through the
+  // Date constructor is UTC midnight, which west of the meridian is still the
+  // evening of the 16th — the restored cursor sat one day behind its own key.
+  const [cursor, setCursorState] = useState(() => preferences.calendarCursor ? parseLocalInputValue(preferences.calendarCursor) : zonedNow(tz));
   const setCursor = (next) => {
     setCursorState(next);
     setPreferences((p) => ({ ...p, calendarCursor: isoDate(next) }));
@@ -2291,7 +2323,7 @@ function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences 
         {calendarView === "daily" && (() => {
           const key = isoDate(cursor);
           const info = byDay[key];
-          const isToday = key === isoDate(new Date());
+          const isToday = key === isoDate(zonedNow(tz));
           return (
             <div className="day-focus" style={{ background: info ? heatBg(info.pnl, Math.max(1, Math.abs(info.pnl))) : "transparent" }}>
               <div className="day-focus-head">
@@ -2368,6 +2400,108 @@ function DayNoteModal({ date, value, onSave, onClose }) {
 }
 
 /* ============================================================================
+   DAILY JOURNAL
+   The same store the calendar edits — preferences.dayNotes, keyed by the local
+   day key — shown as one chronological page. Writing here appears on that
+   day's calendar cell and vice versa; there is exactly one copy of each note.
+============================================================================ */
+function JournalPanel({ trades, preferences, setPreferences, onSelectDay, onToast }) {
+  const tz = useJournalTz();
+  const dayNotes = preferences.dayNotes || {};
+  const [editDate, setEditDate] = useState(null);
+  const [deleteDate, setDeleteDate] = useState(null);
+  const [newDate, setNewDate] = useState(() => isoDate(zonedNow(tz)));
+  const saveDayNote = (key, text) => setPreferences((p) => ({ ...p, dayNotes: { ...p.dayNotes, [key]: text } }));
+
+  // Same bucketing as the calendar heatmap: closed trades with a P&L, keyed by
+  // exit day — so an entry's stats line agrees with its calendar cell.
+  const byDay = useMemo(() => {
+    const m = {};
+    trades.forEach((t) => {
+      if (t.status !== "Closed" || t.pnlAmount === null || !t.exitDateTime) return;
+      const k = isoDate(t.exitDateTime);
+      if (!k) return;
+      if (!m[k]) m[k] = { pnl: 0, count: 0 };
+      m[k].pnl += t.pnlAmount;
+      m[k].count += 1;
+    });
+    return m;
+  }, [trades]);
+
+  // Keyed on the stored object itself — journalEntries tolerates null, and the
+  // `|| {}` fallback above would be a fresh object every render.
+  const entries = useMemo(() => journalEntries(preferences.dayNotes), [preferences.dayNotes]);
+
+  const exportAs = async (kind) => {
+    const stamp = isoDate(zonedNow(tz));
+    const res = kind === "md"
+      ? await saveTextExport(`BrijTradeJournal_Journal_${stamp}.md`, journalToMarkdown(dayNotes, byDay), "text/markdown;charset=utf-8")
+      : await saveTextExport(`BrijTradeJournal_Journal_${stamp}.csv`, journalToCSV(dayNotes), "text/csv;charset=utf-8");
+    if (res && !res.canceled) {
+      if (res.ok) onToast?.({ message: `Journal exported${res.path ? "" : " to your downloads"}`, tone: "profit" });
+      else onToast?.({ message: `Export failed${res.error ? `: ${res.error}` : ""}`, tone: "loss" });
+    }
+  };
+
+  return (
+    <div className="stack">
+      <Panel
+        title="Daily Journal"
+        right={
+          <div className="journal-toolbar">
+            <button className="btn btn-ghost" disabled={!entries.length} title="Export the journal as Markdown" onClick={() => exportAs("md")}><FileText size={13} /> Markdown</button>
+            <button className="btn btn-ghost" disabled={!entries.length} title="Export the journal as CSV" onClick={() => exportAs("csv")}><FileSpreadsheet size={13} /> CSV</button>
+          </div>
+        }
+      >
+        <div className="journal-add-row">
+          <input type="date" className="input" value={newDate} onChange={(e) => setNewDate(e.target.value)} aria-label="Entry date" />
+          <button className="btn btn-primary" disabled={!newDate} onClick={() => setEditDate(newDate)}>
+            <Pencil size={13} /> {dayNotes[newDate]?.trim() ? "Edit entry" : "Write entry"}
+          </button>
+        </div>
+        {entries.length === 0 ? (
+          <EmptyState icon={BookOpen} title="No journal entries yet" message="Write a note for any trading day — entries appear here and on that day's calendar cell." />
+        ) : (
+          <div className="journal-list">
+            {entries.map(([date, text]) => {
+              const info = byDay[date];
+              return (
+                <div className="journal-entry" key={date}>
+                  <div className="journal-entry-head">
+                    {/* Through parseLocalInputValue, not new Date(date): a bare
+                        day key through the Date constructor is UTC midnight,
+                        the previous evening west of the meridian. */}
+                    <span className="mono cell-strong">{fmtDate(parseLocalInputValue(date))}</span>
+                    {info
+                      ? <span className="hint mono">{info.count} trade{info.count === 1 ? "" : "s"} · <PnlText value={info.pnl} /></span>
+                      : <span className="hint">No closed trades</span>}
+                    <div className="journal-entry-actions">
+                      {info && <button className="btn btn-ghost row-edit-btn" onClick={() => onSelectDay(date)}>View trades</button>}
+                      <button className="icon-btn" title="Edit entry" aria-label={`Edit entry for ${date}`} onClick={() => setEditDate(date)}><Pencil size={13} /></button>
+                      <button className="icon-btn icon-btn-danger" title="Delete entry" aria-label={`Delete entry for ${date}`} onClick={() => setDeleteDate(date)}><Trash2 size={13} /></button>
+                    </div>
+                  </div>
+                  <div className="journal-entry-text">{text.trim()}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Panel>
+      {editDate && <DayNoteModal date={editDate} value={dayNotes[editDate] || ""} onSave={(text) => saveDayNote(editDate, text)} onClose={() => setEditDate(null)} />}
+      {deleteDate && (
+        <ConfirmModal
+          title="Delete Journal Entry" danger confirmLabel="Delete"
+          message={`Delete the note for ${deleteDate}? The calendar's day journal loses it too.`}
+          onConfirm={() => saveDayNote(deleteDate, "")} onClose={() => setDeleteDate(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ============================================================================
    CHARTS
    The Recharts components live in ./Charts and are pulled in lazily, keeping the
    charting library out of the initial bundle. Each is wrapped so callers can go
@@ -2424,10 +2558,13 @@ function DashboardPanel({ trades, settings, chartMode = "amount", setChartMode }
   // Period keys are recomputed every render but are only cheap string builds.
   // They belong in the deps below so the figures roll over correctly if the app
   // is left open across midnight, rather than pinning to the day it mounted.
-  const today = isoDate(new Date());
-  const wk = isoWeekKey(new Date());
-  const mo = monthKey(new Date());
-  const yearKey = new Date().getFullYear();
+  // "Midnight" here is the journal zone's, so Today/This Week/This Month agree
+  // with the calendar for a trader journalling a session abroad.
+  const now = zonedNow(useJournalTz());
+  const today = isoDate(now);
+  const wk = isoWeekKey(now);
+  const mo = monthKey(now);
+  const yearKey = now.getFullYear();
 
   // Every figure below walks the whole trade list. Grouped into one memo so a
   // re-render triggered by anything else — a theme change, a modal opening —
@@ -2683,7 +2820,7 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
   const useFiltered = scope === "filtered" && filtersActive;
   const trades = useFiltered ? filteredTrades : allTrades;
   const scopeSuffix = useFiltered ? "Filtered" : "All";
-  const fileStamp = `${isoDate(new Date())}_${scopeSuffix}`;
+  const fileStamp = `${isoDate(zonedNow(settings.timezone))}_${scopeSuffix}`;
 
   const overall = summarize(trades);
   const points = equityCurve(trades, settings.startingBalance);
@@ -2800,7 +2937,7 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
       <head><meta charset="utf-8"><title>${escapeHtml(reportName)} — Report</title>
       <style>${pageCss}body{font-family:Calibri,Arial,sans-serif;color:#1a1a1a;} h1{color:#161A22;margin-bottom:0;} h2{border-bottom:2px solid #3E8FFF;padding-bottom:4px;} table{border-collapse:collapse;width:100%;margin:10px 0;} td,th{border:1px solid #ccc;padding:6px 8px;font-size:11px;text-align:left;} th{background:#161A22;color:#fff;} .summary-grid td{font-size:12px;} img{max-width:100%;}</style></head>
       <body>
-        <h1>${escapeHtml(reportName)}</h1><p style="color:#888;margin-top:2px">Trading Performance Report${scopeLabel ? ` · ${escapeHtml(scopeLabel)}` : ""} · ${useFiltered ? "Filtered selection" : "All trades"} · Generated ${fmtDateTime(new Date())}</p>
+        <h1>${escapeHtml(reportName)}</h1><p style="color:#888;margin-top:2px">Trading Performance Report${scopeLabel ? ` · ${escapeHtml(scopeLabel)}` : ""} · ${useFiltered ? "Filtered selection" : "All trades"} · Generated ${fmtDateTime(zonedNow(settings.timezone))}</p>
         <h2>Summary</h2>
         <table class="summary-grid">
           <tr><td><b>Starting Balance</b></td><td>${fmtCurrency(settings.startingBalance)}</td><td><b>Current Balance</b></td><td>${fmtCurrency(balance)}</td></tr>
@@ -2909,6 +3046,10 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
    SETTINGS PANEL
 ============================================================================ */
 function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, setTheme, strategies, setStrategies, onImportTrades, activeAccountId, setActiveAccountId, preferences, setPreferences }) {
+  // ~400 zones × an Intl formatter each is a one-time cost taken when Settings
+  // mounts, not on every keystroke in the panel. Offsets are "now"-relative
+  // (DST), which is as precise as a picker label needs to be.
+  const tzOptions = useMemo(() => TIMEZONE_CHOICES.map((z) => ({ z, off: tzOffsetLabel(z) })), []);
   const fileRef = useRef(null);
   const csvRef = useRef(null);
   const [msg, setMsg] = useState("");
@@ -3010,7 +3151,7 @@ function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, s
     const payload = { app: APP_NAME, settings, strategies, trades: tradesWithShots, exportedAt: new Date().toISOString(), version: 3 };
     // Through the shared export helper like every other file the app writes, so
     // the desktop build gets its native Save As instead of a silent download.
-    const res = await saveTextExport(`BrijTradeJournal_Backup_${isoDate(new Date())}.json`, JSON.stringify(payload), "application/json");
+    const res = await saveTextExport(`BrijTradeJournal_Backup_${isoDate(zonedNow(settings.timezone))}.json`, JSON.stringify(payload), "application/json");
     if (res?.canceled) setMsg("");
     else if (res?.ok) setMsg(`Backup saved${res.path ? "" : " to your downloads"}.`);
     else setMsg(`Backup failed${res?.error ? `: ${res.error}` : ""}.`);
@@ -3055,7 +3196,25 @@ function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, s
               onChange={(e) => setSettings((s) => ({ ...s, journalTagline: e.target.value }))}
             />
           </Field>
+          <Field label="Journal timezone">
+            <select
+              className="input" value={settings.timezone || ""}
+              onChange={(e) => setSettings((s) => ({ ...s, timezone: e.target.value }))}
+            >
+              <option value="">System — {SYSTEM_TZ} ({tzOffsetLabel(SYSTEM_TZ)})</option>
+              {/* A zone restored from another machine can be absent from this
+                  runtime's list; keep it selectable instead of silently
+                  snapping the select to System. */}
+              {settings.timezone && !TIMEZONE_CHOICES.includes(settings.timezone) && (
+                <option value={settings.timezone}>{settings.timezone}</option>
+              )}
+              {tzOptions.map(({ z, off }) => <option key={z} value={z}>{z} ({off})</option>)}
+            </select>
+          </Field>
         </div>
+        <p className="hint" style={{ marginTop: 8 }}>
+          "Today", the weekly and monthly ranges, the clock and the date picker's Now follow this zone — useful when you trade a session abroad. Trade times are saved exactly as you type them; changing the zone never shifts an existing trade.
+        </p>
       </Panel>
 
       <Panel title="Accounts" right={<Badge tone="accent"><Wallet size={12} /> {accounts.length} account{accounts.length === 1 ? "" : "s"}</Badge>}>
@@ -3130,6 +3289,13 @@ function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, s
             <button type="button" className={`seg-btn ${preferences.density === "compact" ? "seg-active-plain" : ""}`} onClick={() => setPreferences((p) => ({ ...p, density: "compact" }))}>Compact</button>
           </div>
         </div>
+        <div className="accent-row">
+          <span className="field-label" style={{ marginRight: 2 }}>Clock</span>
+          <div className="segmented segmented-tight" style={{ maxWidth: 280 }}>
+            <button type="button" className={`seg-btn ${preferences.clockFormat !== "24h" ? "seg-active-plain" : ""}`} onClick={() => setPreferences((p) => ({ ...p, clockFormat: "12h" }))}>12-hour</button>
+            <button type="button" className={`seg-btn ${preferences.clockFormat === "24h" ? "seg-active-plain" : ""}`} onClick={() => setPreferences((p) => ({ ...p, clockFormat: "24h" }))}>24-hour</button>
+          </div>
+        </div>
       </Panel>
 
       <Panel title="Trading Goals" right={<Badge tone="accent"><Target size={12} /> Dashboard</Badge>}>
@@ -3145,8 +3311,26 @@ function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, s
         </div>
       </Panel>
 
-      <Panel title="Strategies" right={<button className="btn btn-ghost" onClick={() => setShowStrategyMgr(true)}><SettingsIcon size={13} /> Manage</button>}>
-        <div className="strategy-chip-row">{strategies.map((s) => <span key={s} className="badge badge-neutral">{s}</span>)}</div>
+      <Panel title="Strategy Playbook" right={<button className="btn btn-ghost" onClick={() => setShowStrategyMgr(true)}><SettingsIcon size={13} /> Manage</button>}>
+        <p className="hint" style={{ marginBottom: 12 }}>
+          Describe each strategy — the setup, entry trigger, invalidation, management rules. Notes live in the journal and ride along in backups. A note keeps its text if its strategy is renamed away and back, or removed and re-added.
+        </p>
+        {strategies.length === 0 ? (
+          <div className="hint">No strategies yet — add one with Manage.</div>
+        ) : (
+          <div className="stack" style={{ gap: 10 }}>
+            {strategies.map((s) => (
+              <Field label={s} key={s}>
+                <textarea
+                  className="input textarea" rows={3} maxLength={5000}
+                  placeholder="Setup, entry trigger, invalidation, sizing, management…"
+                  value={settings.strategyNotes?.[s] || ""}
+                  onChange={(e) => setSettings((st) => ({ ...st, strategyNotes: { ...st.strategyNotes, [s]: e.target.value } }))}
+                />
+              </Field>
+            ))}
+          </div>
+        )}
       </Panel>
 
       <Panel title="Rule Checklist" right={<Badge tone="accent">Per-trade discipline</Badge>}>
@@ -3236,15 +3420,22 @@ function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, s
 /* ============================================================================
    LIVE CLOCK
 ============================================================================ */
-function LiveClock() {
-  const [time, setTime] = useState(() => new Date());
+function LiveClock({ format = "12h" }) {
+  const tz = useJournalTz();
+  // State holds the raw instant; the zone is applied at render so a timezone
+  // change re-reads the clock immediately instead of waiting out the interval.
+  const [tick, setTick] = useState(() => new Date());
   useEffect(() => {
-    const id = setInterval(() => setTime(new Date()), 60000);
+    const id = setInterval(() => setTick(new Date()), 60000);
     return () => clearInterval(id);
   }, []);
+  const time = zonedNow(tz, tick);
   const dateStr = time.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-  const hm = time.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  return <span className="mono live-clock">{dateStr}, {hm}</span>;
+  const hm = time.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: format !== "24h" });
+  // A journal pinned to another zone marks the clock with its offset, so a
+  // glance explains why it disagrees with the machine's taskbar.
+  const off = tz ? ` ${tzOffsetLabel(tz, tick)}` : "";
+  return <span className="mono live-clock" title={tz ? `Journal timezone: ${tz}` : "Machine time"}>{dateStr}, {hm}{off}</span>;
 }
 
 /* ============================================================================
@@ -3255,6 +3446,7 @@ const NAV = [
   { key: "trades", label: "Trades", icon: ListChecks },
   { key: "analytics", label: "Analytics", icon: BarChart3 },
   { key: "calendar", label: "Calendar", icon: CalendarDays },
+  { key: "journal", label: "Journal", icon: BookOpen },
   { key: "reports", label: "Reports", icon: FileDown },
   { key: "settings", label: "Settings", icon: SettingsIcon },
 ];
@@ -3584,7 +3776,7 @@ export default function App() {
   const scopedSettings = useMemo(() => ({ ...settings, startingBalance }), [settings, startingBalance]);
 
   const filtered = useMemo(() => {
-    const range = dateRangeForPreset(filters.datePreset, new Date(), filters.dateFrom, filters.dateTo);
+    const range = dateRangeForPreset(filters.datePreset, zonedNow(settings.timezone), filters.dateFrom, filters.dateTo);
     return scopedTrades.filter((t) => {
       if (dayFilter && isoDate(t.exitDateTime) !== dayFilter) return false;
       const dateForFilter = t.exitDateTime || t.entryDateTime;
@@ -3603,7 +3795,7 @@ export default function App() {
       if (filters.search) { const q = filters.search.toLowerCase(); const hay = `${t.id} ${t.symbol} ${t.strategy} ${t.notes} ${(t.tags || []).join(" ")} ${t._accountName || ""}`.toLowerCase(); if (!hay.includes(q)) return false; }
       return true;
     });
-  }, [scopedTrades, filters, dayFilter]);
+  }, [scopedTrades, filters, dayFilter, settings.timezone]);
 
   // Whether the current view is narrowed at all — drives the Reports panel's
   // "export all vs. export current filter" choice.
@@ -3856,6 +4048,7 @@ export default function App() {
   }
 
   return (
+    <TimezoneContext.Provider value={settings.timezone || ""}>
     <div className={`app-root ${preferences.density === "compact" ? "density-compact" : ""}`}>
       {/* Two tags on purpose: the static sheet is a constant React never has to
           re-create or diff, while only the small token block re-renders on a
@@ -3881,7 +4074,7 @@ export default function App() {
             {n.key === "trades" && openCount > 0 && <span className="nav-badge"><Badge tone="accent">{openCount}</Badge></span>}
           </button>
         ))}
-        <div className="sidebar-footer">Data stored locally in this app. Ctrl/Cmd+K — command palette · Ctrl/Cmd+N — new trade · Ctrl/Cmd+1–6 — tabs · Alt+← / → — back &amp; forward · ? — all shortcuts.</div>
+        <div className="sidebar-footer">Data stored locally in this app. Ctrl/Cmd+K — command palette · Ctrl/Cmd+N — new trade · Ctrl/Cmd+1–7 — tabs · Alt+← / → — back &amp; forward · ? — all shortcuts.</div>
       </aside>
 
       <div className="main-col">
@@ -3908,12 +4101,13 @@ export default function App() {
                 {tab === "trades" && `${filtered.length} of ${scopedTrades.length} trades shown`}
                 {tab === "analytics" && "Deep-dive into edge, direction, grade and strategy"}
                 {tab === "calendar" && "Daily P&L heatmap"}
+                {tab === "journal" && "Daily notes — shared with the calendar's day journal"}
                 {tab === "reports" && "Export professional trading reports"}
                 {tab === "settings" && "Account, appearance and backups"}
               </div>
             </div>
           </div>
-          <LiveClock />
+          <LiveClock format={preferences.clockFormat} />
           {/* Only a switcher once there is something to switch between. A single
               account is just "the journal", and a one-option select is noise. */}
           {accounts.length > 1 && (
@@ -3977,6 +4171,7 @@ export default function App() {
             ? <EmptyState icon={BarChart3} title="Nothing to analyse" message={filtersActive ? "The current filters leave no trades to chart — loosen them on the Trades tab." : "Analytics needs at least one trade. Log one and the deep-dive builds itself."} />
             : <AnalyticsPanel trades={filtered} chartMode={preferences.chartMode || "amount"} setChartMode={setChartMode} />)}
           {tab === "calendar" && <PerformanceCalendar trades={scopedTrades} preferences={preferences} setPreferences={setPreferences} onSelectDay={(d) => { setDayFilter(d); setTab("trades"); }} />}
+          {tab === "journal" && <JournalPanel trades={scopedTrades} preferences={preferences} setPreferences={setPreferences} onSelectDay={(d) => { setDayFilter(d); setTab("trades"); }} onToast={pushToast} />}
           {tab === "reports" && <ReportsPanel allTrades={scopedTrades} filteredTrades={filtered} filtersActive={filtersActive} settings={scopedSettings} scopeLabel={activeAccount?.name || (accounts.length > 1 ? "All Accounts" : "")} onToast={pushToast} />}
           {tab === "settings" && (
             <SettingsPanel
@@ -4056,6 +4251,7 @@ export default function App() {
       {showShortcuts && <KeyboardShortcutsModal onClose={() => setShowShortcuts(false)} />}
       <ToastHost toasts={toasts} onDismiss={dismissToast} />
     </div>
+    </TimezoneContext.Provider>
   );
 }
 /* Transient bottom-right notifications. Some carry an action (e.g. Undo a
@@ -4081,7 +4277,7 @@ function KeyboardShortcutsModal({ onClose }) {
   const rows = [
     ["Ctrl / Cmd + K", "Command palette — actions, tabs, themes, trade search"],
     ["Ctrl / Cmd + N", "New trade"],
-    ["Ctrl / Cmd + 1 – 6", "Jump to a tab (Dashboard … Settings)"],
+    ["Ctrl / Cmd + 1 – 7", "Jump to a tab (Dashboard … Settings)"],
     ["Alt + ←", "Back to the previous tab"],
     ["Alt + →", "Forward again"],
     ["Ctrl / Cmd + B", "Collapse / expand the sidebar"],
