@@ -7,12 +7,19 @@ npx vitest run -t "aggregateLegs"   # one test or describe block, matched by nam
 npx vitest run src/lib/trade.test.js
 ```
 
-Runner is [vitest](https://vitest.dev). No config file — vitest reads `vite.config.js`, so `__APP_VERSION__` and the React plugin apply automatically. No jsdom and no `@testing-library`: everything under test is pure, so the tests run in plain Node.
+Runner is [vitest](https://vitest.dev). No config file — vitest reads `vite.config.js`, so `__APP_VERSION__` and the React plugin apply automatically.
+
+Two suites, two environments:
+
+- `src/lib/trade.test.js` — the rules. Everything under test is pure, so it runs in plain Node: no DOM, no jsdom.
+- `src/App.test.jsx` — component smoke tests (`@testing-library/react` + `user-event`) for the trade form's validation gate and the trades table. jsdom is opted into **per file** via the `// @vitest-environment jsdom` pragma at its top, so the lib suite stays in Node. Deliberately shallow: they assert the components wire the rules to the user (errors surface, saves fire, destructive paths confirm first), not the maths — that lives in the lib suite.
+
+One trap found writing the component tests: the `DateTimePicker` renders inside a `Field` `<label>`, and buttons are labelable elements — so every button in its popover inherits "Entry Date & Time" as its accessible name. Those tests query the picker by text, not by role+name.
 
 ## Expected result
 
 ```
-Tests  151 passed (151)
+Tests  160 passed (160)
 ```
 
 **A fully green run is the expected state.** No `BUG:`-tagged tests are outstanding — the last one (the CSV fee round trip) went green when the defect was fixed and lost its tag. Any failure is a real regression.

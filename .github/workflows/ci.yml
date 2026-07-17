@@ -1,0 +1,26 @@
+# Lint + test on every push and PR. No build/dist step here on purpose:
+# packaging is manual and Windows-Defender-sensitive (see RELEASING.md), and
+# the suite is the actual gate — it pins the data-model fallbacks that keep
+# real journals loading.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      # npm test already pins TZ=Asia/Kolkata via the package.json script —
+      # that pin is load-bearing (TESTING.md): on a UTC runner the historical
+      # day-bucketing bugs pass silently.
+      - run: npm test

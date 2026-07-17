@@ -28,7 +28,7 @@ electron/
   preload.cjs     contextBridge: window.electronStorage, window.desktopExport
 ```
 
-**Import direction is one-way: `App.jsx` → `lib/*`.** `Charts.jsx`, `format.js` and `trade.js` must never import `App.jsx`. It is circular, and it would pull the whole app into the lazily-loaded chart chunk, undoing the ~300kB code split that is the only reason `Charts.jsx` exists as a separate file.
+**Import direction is one-way: `App.jsx` → `lib/*`.** `Charts.jsx`, `format.js` and `trade.js` must never import `App.jsx`. It is circular, and it would pull the whole app into the lazily-loaded chart chunk, undoing the ~300kB code split that is the only reason `Charts.jsx` exists as a separate file. The linter enforces this: a `no-restricted-imports` block in `eslint.config.js` scoped to `src/lib/**` and `src/Charts.jsx` fails the build on any import of App.
 
 Practical rule: **pure logic goes in `lib/trade.js` with a test. Anything touching `window`, `document` or `storage` stays in `App.jsx`.**
 

@@ -1100,7 +1100,9 @@ function StrategyManager({ strategies, setStrategies, onClose }) {
 /* ============================================================================
    TRADE FORM
 ============================================================================ */
-function TradeForm({ initial, seed, onSave, onClose, strategies, setStrategies, lastDefaults, symbolStats = [], checklistRules = DEFAULT_CHECKLIST_RULES, accounts = DEFAULT_SETTINGS.accounts, defaultAccountId }) {
+// Exported for the component smoke tests (App.test.jsx) — App itself is still
+// the only intended consumer.
+export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrategies, lastDefaults, symbolStats = [], checklistRules = DEFAULT_CHECKLIST_RULES, accounts = DEFAULT_SETTINGS.accounts, defaultAccountId }) {
   const [form, setForm] = useState(() => tradeToForm(initial || seed || emptyTrade({ ...lastDefaults, accountId: defaultAccountId || lastDefaults?.accountId }), accounts));
   const [sizeDriver, setSizeDriver] = useState(form.positionSize && !form.riskAmount ? "size" : "risk");
   // Scaled mode is a property of the trade, not a preference: a trade with legs
@@ -1805,7 +1807,9 @@ const TRADE_COLUMNS = [
   { key: "grade", label: "Grade" },
   { key: "status", label: "Status" },
 ];
-function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDelete, onToast, showAccount = false, hiddenColumns, onToggleColumn }) {
+// Exported for the component smoke tests (App.test.jsx) — App itself is still
+// the only intended consumer.
+export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDelete, onToast, showAccount = false, hiddenColumns, onToggleColumn }) {
   const [sortKey, setSortKey] = useState("entryDateTime");
   const [sortDir, setSortDir] = useState("desc");
   const [page, setPage] = useState(0);

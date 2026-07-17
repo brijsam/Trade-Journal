@@ -25,4 +25,19 @@ export default defineConfig([
     files: ['vite.config.js'],
     languageOptions: { globals: globals.node },
   },
+  {
+    // Import direction is one-way: App.jsx → lib/* and App.jsx → Charts.jsx.
+    // The reverse is circular AND drags the whole app into the lazily-loaded
+    // chart chunk, undoing the ~300kB code split (see ARCHITECTURE.md). This
+    // was convention enforced by comments; now the linter holds the line.
+    files: ['src/lib/**/*.{js,jsx}', 'src/Charts.jsx'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [{
+          group: ['**/App', '**/App.jsx', '../App', '../App.jsx', './App', './App.jsx'],
+          message: 'lib/* and Charts.jsx must never import App.jsx — circular, and it defeats the chart code split. Move shared code into lib/.',
+        }],
+      }],
+    },
+  },
 ])
