@@ -1,0 +1,17 @@
+/* Minimal reset — Brij Trade Journal owns its own layout and theming
+   via CSS variables injected in App.jsx, so this file intentionally
+   stays out of the way (no centering, no max-width, no default padding). */
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  width: 100%;
+}
+body {
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+}
