@@ -57,14 +57,31 @@ function barLabel(format, { valueKey = "pnl", color, horizontal = false } = {}) 
 }
 
 export function EquityCurveChart({ points }) {
+  /* Numeric time axis, not category: several trades closing the same day used
+     to render duplicate ticks of the same label, and uneven gaps between
+     trades all drew the same width. The lib's "Start" point carries ts 0 (no
+     real timestamp), which a numeric axis would plot in 1970 — remap it to
+     just before the first real close so the curve still opens from the
+     starting balance. */
+  const data = useMemo(() => {
+    if (points.length < 2) return points;
+    const first = points[1].ts;
+    const last = points[points.length - 1].ts;
+    const lead = Math.max((last - first) / 20, 3600000);
+    return points.map((p, i) => (i === 0 ? { ...p, ts: first - lead } : p));
+  }, [points]);
+  const fmtTick = (ts) => new Date(ts).toLocaleDateString(undefined, { month: "short", day: "2-digit" });
   return (
     <ResponsiveContainer width="100%" height={280}>
-      <AreaChart data={points} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+      <AreaChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
         <defs><linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity={0.35} /><stop offset="100%" stopColor="var(--accent)" stopOpacity={0} /></linearGradient></defs>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
-        <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--text-muted)" }} minTickGap={30} />
+        <XAxis dataKey="ts" type="number" domain={["dataMin", "dataMax"]} scale="time" tickFormatter={fmtTick} tick={{ fontSize: 10, fill: "var(--text-muted)" }} minTickGap={30} />
         <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => `$${v.toLocaleString()}`} width={70} />
-        <Tooltip contentStyle={CHART_TOOLTIP_STYLE} formatter={(v) => fmtCurrency(v)} />
+        <Tooltip
+          contentStyle={CHART_TOOLTIP_STYLE} formatter={(v) => fmtCurrency(v)}
+          labelFormatter={(ts, payload) => payload?.[0]?.payload?.date ?? ""}
+        />
         <Area type="monotone" dataKey="balance" stroke="var(--accent)" strokeWidth={2} fill="url(#eqGrad)" isAnimationActive={false} />
       </AreaChart>
     </ResponsiveContainer>
@@ -205,21 +222,33 @@ export function LongShortChart({ longStats, shortStats }) {
 export function RRDistributionChart({ trades }) {
   const buckets = ["<-1R", "-1..0R", "0..1R", "1..2R", "2..3R", "3..5R", ">5R"];
   const counts = new Array(buckets.length).fill(0);
+  const pnls = new Array(buckets.length).fill(0);
   trades.forEach((t) => {
     if (t.actualRR === null || !Number.isFinite(t.actualRR)) return;
     const r = t.actualRR;
     let idx;
     if (r < -1) idx = 0; else if (r < 0) idx = 1; else if (r < 1) idx = 2; else if (r < 2) idx = 3; else if (r < 3) idx = 4; else if (r < 5) idx = 5; else idx = 6;
     counts[idx] += 1;
+    if (Number.isFinite(t.pnlAmount)) pnls[idx] += t.pnlAmount;
   });
-  const data = buckets.map((b, i) => ({ bucket: b, count: counts[i], isLoss: i <= 1 }));
+  const data = buckets.map((b, i) => ({ bucket: b, count: counts[i], pnl: round(pnls[i], 2), isLoss: i <= 1 }));
   return (
     <ResponsiveContainer width="100%" height={240}>
       <BarChart data={data} margin={{ top: 22, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="bucket" tick={{ fontSize: 10, fill: "var(--text-muted)" }} />
         <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={30} allowDecimals={false} />
-        <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
+        <Tooltip content={({ active, payload, label }) => {
+          if (!active || !payload?.length) return null;
+          const d = payload[0]?.payload;
+          return (
+            <div style={{ ...CHART_TOOLTIP_STYLE, padding: "8px 10px", minWidth: 140 }}>
+              <div style={{ fontWeight: 700, marginBottom: 4, borderBottom: "1px solid var(--border-soft)", paddingBottom: 4 }}>{label}</div>
+              <div>Trades: {d.count}</div>
+              <div style={{ color: d.pnl >= 0 ? "var(--profit)" : "var(--loss)" }}>Net: {fmtSignedCurrency(d.pnl)}</div>
+            </div>
+          );
+        }} />
         <Bar dataKey="count" radius={[3, 3, 0, 0]} isAnimationActive={false}>
           <LabelList valueAccessor={barRow} content={barLabel((v) => String(v), { valueKey: "count", color: (d) => (d.isLoss ? "var(--loss)" : "var(--accent)") })} />
           {data.map((d, i) => <Cell key={i} fill={d.isLoss ? "var(--loss)" : "var(--accent)"} />)}
@@ -319,7 +348,19 @@ export function DurationHistogramChart({ trades }) {
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="bucket" tick={{ fontSize: 10, fill: "var(--text-muted)" }} />
         <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={30} allowDecimals={false} />
-        <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
+        <Tooltip content={({ active, payload, label }) => {
+          if (!active || !payload?.length) return null;
+          const d = payload[0]?.payload;
+          const total = (d.Wins || 0) + (d.Losses || 0);
+          return (
+            <div style={{ ...CHART_TOOLTIP_STYLE, padding: "8px 10px", minWidth: 140 }}>
+              <div style={{ fontWeight: 700, marginBottom: 4, borderBottom: "1px solid var(--border-soft)", paddingBottom: 4 }}>{label}</div>
+              <div style={{ color: "var(--profit)" }}>Wins: {d.Wins}</div>
+              <div style={{ color: "var(--loss)" }}>Losses: {d.Losses}</div>
+              <div>Win Rate: {total ? fmtPercent((d.Wins / total) * 100, 0) : "—"}</div>
+            </div>
+          );
+        }} />
         <Legend wrapperStyle={{ fontSize: 11, color: "var(--text-secondary)" }} />
         <Bar dataKey="Wins" fill="var(--profit)" radius={[3, 3, 0, 0]} isAnimationActive={false} />
         <Bar dataKey="Losses" fill="var(--loss)" radius={[3, 3, 0, 0]} isAnimationActive={false} />

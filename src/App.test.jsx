@@ -147,6 +147,23 @@ describe("TradesTable — smoke", () => {
     expect(props.onBulkDelete).toHaveBeenCalledWith(["TJ-00001"]);
   });
 
+  it("applies a bulk edit from the selection bar's selects", async () => {
+    const user = userEvent.setup();
+    const props = tableProps([closedTrade("TJ-00001", "BTCUSDT", "110")], {
+      accounts: [{ id: "a1", name: "Main" }, { id: "a2", name: "Prop Firm" }],
+      strategies: ["ICT"],
+      onBulkEdit: vi.fn(),
+    });
+    render(<TradesTable {...props} />);
+
+    await user.click(screen.getByRole("checkbox", { name: /select tj-00001/i }));
+    await user.selectOptions(screen.getByRole("combobox", { name: /move selected trades to account/i }), "a2");
+    expect(props.onBulkEdit).toHaveBeenCalledWith(["TJ-00001"], { accountId: "a2" }, "moved to Prop Firm");
+
+    await user.selectOptions(screen.getByRole("combobox", { name: /set strategy on selected trades/i }), "ICT");
+    expect(props.onBulkEdit).toHaveBeenCalledWith(["TJ-00001"], { strategy: "ICT" }, "strategy set to ICT");
+  });
+
   it("hides a switched-off column", () => {
     render(<TradesTable {...tableProps([closedTrade("TJ-00001", "BTCUSDT", "110")], { hiddenColumns: ["grade"] })} />);
     expect(screen.queryByText("Grade")).toBeNull();

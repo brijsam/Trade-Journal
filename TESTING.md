@@ -19,7 +19,7 @@ One trap found writing the component tests: the `DateTimePicker` renders inside 
 ## Expected result
 
 ```
-Tests  169 passed (169)
+Tests  170 passed (170)
 ```
 
 **A fully green run is the expected state.** No `BUG:`-tagged tests are outstanding — the last one (the CSV fee round trip) went green when the defect was fixed and lost its tag. Any failure is a real regression.

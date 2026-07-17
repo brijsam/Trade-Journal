@@ -317,7 +317,7 @@ const APP_CSS = `
 /* Right-aligned strip above the table holding the column picker. */
 .table-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-bottom: 8px; position: relative; }
 .page-size-picker { display: flex; align-items: center; gap: 6px; }
-.page-size-picker .input { width: auto; padding: 4px 8px; font-size: 12px; }
+.page-size-picker .input, .bulk-select { width: auto; padding: 4px 8px; font-size: 12px; }
 .column-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 60; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,0.4); padding: 8px; min-width: 180px; }
 .column-menu-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; font-size: 12.5px; color: var(--text-secondary); cursor: pointer; }
 .column-menu-item:hover { background: var(--bg-700); color: var(--text-primary); }
@@ -1123,6 +1123,10 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
   const [symbolIdx, setSymbolIdx] = useState(-1);
   const fileRef = useRef(null);
   const [pendingStage, setPendingStage] = useState("Before Entry");
+  // Opt-in downscale for attachments (longest edge 1600px, jpeg 0.8) — full
+  // quality stays the default. All of a trade's images share one storage key,
+  // so a few phone captures can push that record past the size warning below.
+  const [compressShots, setCompressShots] = useState(false);
   const [pasteMsg, setPasteMsg] = useState("");
   const [tagInput, setTagInput] = useState("");
   const [confirmDiscard, setConfirmDiscard] = useState(false);
@@ -1273,7 +1277,7 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
       if (!okTypes.includes(file.type)) { setErr(`Unsupported file type: ${file.name}`); continue; }
       try {
         setBusy(true);
-        const dataUrl = await readImageAsDataUrl(file);
+        const dataUrl = compressShots ? await compressImage(file, 1600, 0.8) : await readImageAsDataUrl(file);
         setForm((f) => ({ ...f, screenshots: [...(f.screenshots || []), { id: uid("SS"), name: file.name, stage: pendingStage, dataUrl }] }));
       } catch { setErr("Could not process image: " + file.name); } finally { setBusy(false); }
     }
@@ -1303,7 +1307,9 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [pendingStage, initial?._loadingShots]); // eslint-disable-line
+    // compressShots is in the deps because handleFiles closes over it — without
+    // it a paste would use the toggle's value from when the listener bound.
+  }, [pendingStage, initial?._loadingShots, compressShots]); // eslint-disable-line
 
   useEffect(() => {
     if (!pasteMsg) return;
@@ -1570,6 +1576,9 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
                 <button type="button" className="btn btn-ghost" onClick={() => fileRef.current?.click()}><Upload size={14} /> Upload image</button>
                 <input ref={fileRef} type="file" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" multiple hidden onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
                 <span className="hint"><ImageIcon size={12} /> or paste with Ctrl+V / ⌘V</span>
+                <label className="checkbox-row hint" title="Downscale new attachments to 1600px JPEG. Already-attached images are left as they are.">
+                  <input type="checkbox" checked={compressShots} onChange={(e) => setCompressShots(e.target.checked)} /> Compress on attach
+                </label>
                 <span className="hint" style={shotsTooLarge ? { color: "var(--loss)", fontWeight: 600 } : undefined}>{approxSize.toFixed(2)} MB attached {busy ? "· processing…" : ""}</span>
               </div>
               {shotsTooLarge && (
@@ -1828,7 +1837,7 @@ const TRADE_COLUMNS = [
 ];
 // Exported for the component smoke tests (App.test.jsx) — App itself is still
 // the only intended consumer.
-export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDelete, onToast, showAccount = false, hiddenColumns, onToggleColumn, initialSort = DEFAULT_TABLE_SORT, onSortChange, initialPageSize = 50, onPageSizeChange }) {
+export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDelete, onBulkEdit, onToast, accounts = [], strategies = [], showAccount = false, hiddenColumns, onToggleColumn, initialSort = DEFAULT_TABLE_SORT, onSortChange, initialPageSize = 50, onPageSizeChange }) {
   // Sort and page size live here but seed from preferences and report changes
   // back up — the table unmounts on every tab switch, and coming back to a
   // reshuffled table reads as the data having changed.
@@ -2019,6 +2028,26 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
             {/* Compare is a two-trade view by construction, so it only appears
                 once the selection is exactly a pair. */}
             {selectedIds.length === 2 && <button className="btn btn-primary" onClick={() => setCompareOpen(true)}>Compare</button>}
+            {/* Pinned to "" so picking is an action, not a state — the select
+                resets the moment the edit is applied. */}
+            {onBulkEdit && accounts.length > 1 && (
+              <select
+                className="input bulk-select" value="" aria-label="Move selected trades to account"
+                onChange={(e) => { const a = accounts.find((x) => x.id === e.target.value); if (a) onBulkEdit(selectedIds, { accountId: a.id }, `moved to ${a.name}`); }}
+              >
+                <option value="" disabled>Move to account…</option>
+                {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+            )}
+            {onBulkEdit && strategies.length > 0 && (
+              <select
+                className="input bulk-select" value="" aria-label="Set strategy on selected trades"
+                onChange={(e) => { if (e.target.value) onBulkEdit(selectedIds, { strategy: e.target.value }, `strategy set to ${e.target.value}`); }}
+              >
+                <option value="" disabled>Set strategy…</option>
+                {strategies.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            )}
             <button className="btn btn-ghost" onClick={exportSelectedCSV} disabled={exporting}>
               {exporting ? <Loader2 size={13} className="spin" /> : <FileSpreadsheet size={13} />} Export CSV
             </button>
@@ -2369,7 +2398,7 @@ function Panel({ title, right, children, className }) {
   return <div className={`panel ${className || ""}`}><div className="panel-header"><h4>{title}</h4>{right}</div><div className="panel-body">{children}</div></div>;
 }
 
-function DashboardPanel({ trades, settings }) {
+function DashboardPanel({ trades, settings, chartMode = "amount", setChartMode }) {
   const startingBalance = settings.startingBalance;
   // Period keys are recomputed every render but are only cheap string builds.
   // They belong in the deps below so the figures roll over correctly if the app
@@ -2446,7 +2475,11 @@ function DashboardPanel({ trades, settings }) {
       </div>
       <div className="two-col">
         <Panel title="Equity Curve"><EquityCurveChart points={points} /></Panel>
-        <Panel title="Daily P&L (last 30 days)"><DailyPnLChart data={dailyData} /></Panel>
+        {/* Same amount/percent preference the Analytics charts follow — one
+            toggle, one stored mode, wherever P&L is charted. */}
+        <Panel title="Daily P&L (last 30 days)" right={setChartMode ? <ChartModeToggle mode={chartMode} setMode={setChartMode} /> : undefined}>
+          <DailyPnLChart data={dailyData} mode={chartMode} />
+        </Panel>
       </div>
       <Panel title="Trading Goals" right={<Badge tone="accent">Editable in Settings</Badge>}>
         <div className="goal-grid">
@@ -3658,6 +3691,15 @@ export default function App() {
     });
   };
 
+  // Bulk field edit from the table's selection bar — move to an account, set a
+  // strategy. Trades are replaced, never mutated, so computeTrade's WeakMap
+  // cache re-derives exactly the rows touched.
+  const bulkEdit = (ids, patch, label) => {
+    const idSet = new Set(ids);
+    setTrades((prev) => prev.map((t) => (idSet.has(t.id) ? { ...stripComputed(t), ...patch } : t)));
+    pushToast({ message: `${ids.length} trade${ids.length > 1 ? "s" : ""} ${label}`, tone: "accent" });
+  };
+
   const openEdit = async (t) => {
     setEditing({ ...t, screenshots: [], _loadingShots: (t.screenshotCount || 0) > 0 });
     setShowForm(true);
@@ -3885,7 +3927,7 @@ export default function App() {
               emptiness is the filters' own message to deliver. */}
           {tab === "dashboard" && (scopedTrades.length === 0
             ? <EmptyState title="Nothing journalled yet" message="Log your first trade — or import your broker's CSV from Settings — and this dashboard lights up." actionLabel="New Trade" onAction={() => { setEditing(null); setSeedTrade(null); setShowForm(true); }} />
-            : <DashboardPanel trades={scopedTrades} settings={scopedSettings} />)}
+            : <DashboardPanel trades={scopedTrades} settings={scopedSettings} chartMode={preferences.chartMode || "amount"} setChartMode={setChartMode} />)}
           {tab === "trades" && (scopedTrades.length === 0 ? (
             <EmptyState title="No trades in this journal yet" message="Every trade you log lands here, sortable and filterable. Start with one, or import your broker's CSV from Settings." actionLabel="New Trade" onAction={() => { setEditing(null); setSeedTrade(null); setShowForm(true); }} />
           ) : (
@@ -3901,7 +3943,8 @@ export default function App() {
                   than one can appear — i.e. the pooled view. */}
               <TradesTable
                 trades={filtered} showAccount={!activeAccountId && accounts.length > 1}
-                onView={openView} onEdit={openEdit} onDelete={deleteTrade} onCopy={openCopy} onBulkDelete={setBulkDeleteIds} onToast={pushToast}
+                onView={openView} onEdit={openEdit} onDelete={deleteTrade} onCopy={openCopy} onBulkDelete={setBulkDeleteIds} onBulkEdit={bulkEdit} onToast={pushToast}
+                accounts={accounts} strategies={strategies}
                 hiddenColumns={preferences.hiddenColumns}
                 onToggleColumn={(key) => setPreferences((p) => ({ ...p, hiddenColumns: p.hiddenColumns.includes(key) ? p.hiddenColumns.filter((k) => k !== key) : [...p.hiddenColumns, key] }))}
                 initialSort={preferences.tableSort} onSortChange={(sort) => setPreferences((p) => ({ ...p, tableSort: sort }))}
