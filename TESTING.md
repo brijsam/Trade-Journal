@@ -12,7 +12,7 @@ Runner is [vitest](https://vitest.dev). No config file — vitest reads `vite.co
 Two suites, two environments:
 
 - `src/lib/trade.test.js` — the rules. Everything under test is pure, so it runs in plain Node: no DOM, no jsdom.
-- `src/App.test.jsx` — component smoke tests (`@testing-library/react` + `user-event`) for the trade form's validation gate, the trades table, the daily journal panel and the strategy playbook fields. jsdom is opted into **per file** via the `// @vitest-environment jsdom` pragma at its top, so the lib suite stays in Node. Deliberately shallow: they assert the components wire the rules to the user (errors surface, saves fire, destructive paths confirm first), not the maths — that lives in the lib suite. `TradeForm`, `TradesTable`, `JournalPanel` and `SettingsPanel` are exported from App.jsx for these tests only.
+- `src/App.test.jsx` — component smoke tests (`@testing-library/react` + `user-event`) for the trade form's validation gate, the trades table, the daily journal panel (including its filter) and the strategy playbook tab. jsdom is opted into **per file** via the `// @vitest-environment jsdom` pragma at its top, so the lib suite stays in Node. Deliberately shallow: they assert the components wire the rules to the user (errors surface, saves fire, destructive paths confirm first), not the maths — that lives in the lib suite. `TradeForm`, `TradesTable`, `JournalPanel`, `PlaybookPanel` and `SettingsPanel` are exported from App.jsx for these tests only.
 
 One trap found writing the component tests: the `DateTimePicker` renders inside a `Field` `<label>`, and buttons are labelable elements — so every button in its popover inherits "Entry Date & Time" as its accessible name. Those tests query the picker by text, not by role+name.
 
@@ -21,7 +21,7 @@ Another: React reverts a controlled input's DOM value back to its (unchanged) `v
 ## Expected result
 
 ```
-Tests  200 passed (200)
+Tests  209 passed (209)
 ```
 
 **A fully green run is the expected state.** No `BUG:`-tagged tests are outstanding — the last one (the CSV fee round trip) went green when the defect was fixed and lost its tag. Any failure is a real regression.
@@ -49,8 +49,9 @@ The `BUG:` convention stays: a test tagged `BUG:` asserts what the code *should*
 | Dates | duration, ISO week/month keys, ranges, presets |
 | Day keys | `isoDate` answers the **local** day — early-morning trades, local midnight, calendar cell keys, preset boundaries |
 | Journal timezone | `zonedNow` reads another zone's wall clock (EST and EDT), lands "today" on the journal zone's day when it differs from the machine's, `""`/unknown ids fall back to the machine, `mergeSettings` defaults pre-timezone journals to `""` and drops invalid ids; `tzOffsetLabel` tracks DST and half-hour offsets |
-| Daily journal | `journalEntries` orders newest first and drops blanks/non-day keys; markdown headings carry the day's trade count and P&L; a multi-line note round-trips through CSV quoting |
+| Daily journal | `journalEntries` orders newest first and drops blanks/non-day keys; markdown headings carry the day's trade count and P&L; a multi-line note round-trips through CSV quoting; `filterJournalEntries` narrows by inclusive day range and case-insensitive text, and the exporters emit exactly the filtered set; `journalToHtml` escapes note free text and splits Word (Office namespaces) from PDF (`@page`) variants |
 | Strategy playbook | `strategyNotes` normalized to a map of non-blank strings, junk shapes to `{}`, notes length-capped |
+| Chart windows | `weeklyChartCount`/`monthlyChartCount` constrained to the picker ladder (`CHART_PERIOD_CHOICES`, 0 = all), off-ladder values fall back to the 5-period default |
 | Clock format | `clockFormat` constrained to `12h`/`24h`, `12h` the legacy default |
 | Trade ids | high-water counter: a deleted trade's number is never reissued, the counter can't fall behind the journal |
 

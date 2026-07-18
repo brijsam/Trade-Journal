@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Brij Trade Journal — a local-first trading performance journal (crypto, forex, commodities, stocks, futures). It ships two ways from one codebase: a Vite/React web build, and a packaged Windows desktop app (Electron + NSIS installer). There is no backend and no network calls; the packaged app must work fully offline.
+Trade Journal (display name; the repo keeps its original folder/package identity) — a local-first trading performance journal (crypto, forex, commodities, stocks, futures). It ships two ways from one codebase: a Vite/React web build, and a packaged Windows desktop app (Electron + NSIS installer). There is no backend and no network calls; the packaged app must work fully offline.
 
 Deeper references, all in the repo root: [ARCHITECTURE.md](ARCHITECTURE.md) (data model and storage in full), [TESTING.md](TESTING.md) (how the suite is built and why it is pinned to IST), [RELEASING.md](RELEASING.md) (packaging rules), [KNOWN_ISSUES.md](KNOWN_ISSUES.md) (live defects, plus the fixed ones worth not re-introducing — **read before touching date handling or CSV**).
 
@@ -23,13 +23,13 @@ npx vitest run -t "aggregateLegs"   # single test or describe block, by name
 
 Verification for any change is `npm run lint` + `npm test`, plus driving the app when the change is visual (`.claude/launch.json` defines the dev server as "Trading Journal Dev" on port 5173).
 
-**`npm test` is expected to be fully green (200 passed).** No `BUG:`-tagged known-failing tests are outstanding — the CSV fee round-trip defect that used to hold the count at 1 failure is fixed. If a future defect lands a new `BUG:` test, [TESTING.md](TESTING.md) and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) carry the expected count; a `BUG:` test must never be made green by rewriting its expectation. Any failure today is a real regression.
+**`npm test` is expected to be fully green (209 passed).** No `BUG:`-tagged known-failing tests are outstanding — the CSV fee round-trip defect that used to hold the count at 1 failure is fixed. If a future defect lands a new `BUG:` test, [TESTING.md](TESTING.md) and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) carry the expected count; a `BUG:` test must never be made green by rewriting its expectation. Any failure today is a real regression.
 
 ## Layout
 
 - `src/lib/trade.js` — **the journal's rules.** Trade maths, aggregate stats, date bucketing, storage sharding, account/settings normalization, CSV import/export, form shapes. Pure: no React, no DOM, no storage. This is where behaviour changes belong.
 - `src/lib/trade.test.js` — the feature suite covering the above (plain Node, no DOM).
-- `src/App.test.jsx` — component smoke tests for the trade form's validation gate and the trades table (jsdom via per-file pragma; the lib suite stays DOM-free). `TradeForm`, `TradesTable`, `JournalPanel` and `SettingsPanel` are exported from App.jsx for these tests only.
+- `src/App.test.jsx` — component smoke tests for the trade form's validation gate, the trades table, the journal panel and the strategy playbook (jsdom via per-file pragma; the lib suite stays DOM-free). `TradeForm`, `TradesTable`, `JournalPanel`, `PlaybookPanel` and `SettingsPanel` are exported from App.jsx for these tests only.
 - `src/lib/format.js` — pure display formatting shared by both bundles.
 - `src/lib/storage.js` — the storage backend switch.
 - `src/App.jsx` (~3.6k lines) — the React shell: design tokens, CSS, every panel and modal, and the root `App` component. Sections are marked with `/* ==== NAME ==== */` banners; grep those to navigate. List-scale code paths (e.g. the trades table sort) derive per-row keys once and keep comparators free of per-comparison parsing — hold that line when touching them.
@@ -73,8 +73,9 @@ Journals written by 2.x are still on disk. Every v3 field is additive with a fal
 - **Fill legs** — optional `entries[]`/`exits[]`. `aggregateLegs()` returns the size-weighted average, and legs outrank `entryPrice`/`exitPrice`/`positionSize`. The form mirrors the aggregate back onto those flat fields so leg-unaware code still sees a coherent trade. P&L uses matched qty = `min(entryQty, exitQty)`; the remainder is `_openQty`.
 - **Fee split** — `commission` + `swap`, with `fees` remaining the total of record, rewritten on save. Either split field present means the total is their sum; neither means `fees` is the total (pre-split journal or CSV import).
 - **Journal timezone** — `settings.timezone` (IANA id, `""` = follow the machine = pre-v3.2 behaviour). Moves **only "now"** (today keys, presets, calendar highlight, clock, picker prefill) via `zonedNow()`; stored trade times are naive wall-clock strings and are never shifted. Reaches leaf components via `TimezoneContext` in App.jsx, whose `""` default keeps provider-less component tests on legacy behaviour. `tzOffsetLabel()` renders the live GMT offset (DST-aware) on the picker's options and the topbar clock. See [ARCHITECTURE.md](ARCHITECTURE.md#the-journal-timezone).
-- **Daily journal** — `preferences.dayNotes`, one map keyed by the local day key. The Journal tab and the calendar's day notes edit the **same map**; there is no second store and nothing to sync. Exported via `journalEntries` / `journalToMarkdown` / `journalToCSV` (newest first, blanks and non-day keys dropped).
-- **Strategy playbook** — `settings.strategyNotes`, name → free text, normalized by `normalizeStrategyNotes` (plain string map, blanks dropped, 5000-char cap). A note deliberately survives its strategy being renamed or removed — the name coming back finds it intact.
+- **Daily journal** — `preferences.dayNotes`, one map keyed by the local day key. The Journal tab and the calendar's day notes edit the **same map**; there is no second store and nothing to sync. The tab's filter (day range + note text, `filterJournalEntries`) narrows the list **and** every export — Markdown / CSV / Word / PDF, via `journalEntries` → `journalToMarkdown` / `journalToCSV` / `journalToHtml` (the exporters take the filtered entries *array*, not the raw map; newest first, blanks and non-day keys dropped).
+- **Strategy playbook** — `settings.strategyNotes`, name → free text, normalized by `normalizeStrategyNotes` (plain string map, blanks dropped, 5000-char cap). Lives on its **own Playbook tab** (moved out of Settings in 3.3). A note deliberately survives its strategy being renamed or removed — the name coming back finds it intact.
+- **Analytics chart windows** — `preferences.weeklyChartCount` / `monthlyChartCount` (default 5, ladder `CHART_PERIOD_CHOICES`, 0 = all) window the Weekly/Monthly Performance charts to the most recent N periods via `slice(-N)` over `groupPerformance`'s ascending rows.
 
 Each of these is pinned by tests in `trade.test.js`. If a test named for a legacy fallback goes red, a real journal on disk just stopped loading correctly — do not delete the test.
 
@@ -99,6 +100,6 @@ Every `Bar`, `Pie` and `Area` in `Charts.jsx` sets `isAnimationActive={false}`, 
 Full checklist in [RELEASING.md](RELEASING.md). The rules that must not be broken:
 
 - `version` in package.json is the **only** field a release bumps. `vite.config.js` injects it as `__APP_VERSION__` (declared as a global in eslint config), so Settings > About can't drift.
-- **`name: "tradingjournal"` is load-bearing.** Electron derives `userData` from `name`, not from `build.productName` — changing it strands the user's trades. `productName` only renames the exe/installer. `migrateLegacyStorage()` in `main.cjs` is a one-time copy in from older `name` values. Leave `name` and `build.appId` alone.
+- **`name: "tradingjournal"` is load-bearing.** Electron derives `userData` from `name`, not from `build.productName` — changing it strands the user's trades. `productName` only renames the exe/installer, and was deliberately renamed to `"Trade Journal"` in 3.3 (the display rebrand) — the journal still lives under `%APPDATA%\tradingjournal` precisely because `name` did not move. `migrateLegacyStorage()` in `main.cjs` is a one-time copy in from older `name` values. Leave `name` and `build.appId` alone.
 - **`build.publish: null` is deliberate.** Without it, electron-builder detects the git remote and writes `latest.yml` update metadata regardless. Distribution is manual download; do not re-add a publish config or wire up electron-updater.
 - `npm run dist` works on this machine as of 2026-07-17 — the owner added a Defender real-time-protection exclusion for the repo. Without that exclusion it fails with `EPERM: operation not permitted, rename 'release\win-unpacked.tmp' -> 'release\win-unpacked'` (real-time protection holds a handle on freshly extracted Electron files; a fresh output dir does **not** dodge it). If the failure reappears, the exclusion has been removed — it is a security setting the user must change themselves.

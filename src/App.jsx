@@ -29,7 +29,7 @@ import {
   SHARD_COUNT, META_KEY, SHARD_PREFIX, SHOTS_PREFIX, shardKey, shardOf,
   uid, nextTradeId, tradeSeq, pad, fmtDate, fmtDateTime, isoDate, isoWeekKey, monthKey, monthLabel,
   weekOfMonthLabel, weekOfMonthKey, toLocalInputValue, parseLocalInputValue, zonedNow, tzOffsetLabel,
-  journalEntries, journalToMarkdown, journalToCSV,
+  journalEntries, journalToMarkdown, journalToCSV, journalToHtml, filterJournalEntries, CHART_PERIOD_CHOICES,
   normalizeAccounts, mergeSettings, mergePreferences, clampZoom, stepZoom, startOfWeek, dateRangeForPreset, dateInRange,
   groupPerformance, goalProgress, computeTrade, aggregateLegs, stripComputed,
   escapeHtml, tradesToCSV, parseCSV, rowsToTrades, partitionDuplicateImports, paletteFilter, normalizeAccent,
@@ -58,7 +58,7 @@ const SYSTEM_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
    never competes with the strict green/red P&L semantics, muted gold as a
    secondary accent for grading/highlights.
 ============================================================================ */
-const APP_NAME = "Brij Trade Journal";
+const APP_NAME = "Trade Journal";
 const APP_TAGLINE = "Performance Desk";
 // Injected from package.json by vite.config.js, so a release only bumps one
 // place. The fallback keeps this defined under tooling that doesn't apply the
@@ -522,6 +522,10 @@ const APP_CSS = `
 /* Daily journal tab */
 .journal-toolbar { display: flex; gap: 8px; }
 .journal-add-row { display: flex; gap: 8px; margin-bottom: 14px; max-width: 420px; }
+.journal-filter-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 14px; padding: 10px 12px; background: var(--bg-900); border: 1px solid var(--border-soft); border-radius: 10px; }
+.journal-filter-row .field { min-width: 150px; flex: 0 1 auto; }
+.journal-filter-clear { white-space: nowrap; }
+.chart-period-select { width: auto; padding: 3px 8px; font-size: 11.5px; }
 .journal-list { display: flex; flex-direction: column; gap: 10px; }
 .journal-entry { background: var(--bg-900); border: 1px solid var(--border-soft); border-radius: 10px; padding: 10px 12px; }
 .journal-entry-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
@@ -2053,7 +2057,7 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
   const exportSelectedCSV = async () => {
     setExporting(true);
     try {
-      const res = await saveTextExport(`BrijTradeJournal_Selected_${isoDate(zonedNow(tz))}.csv`, tradesToCSV(selectedTrades), "text/csv;charset=utf-8");
+      const res = await saveTextExport(`TradeJournal_Selected_${isoDate(zonedNow(tz))}.csv`, tradesToCSV(selectedTrades), "text/csv;charset=utf-8");
       if (res && !res.canceled) {
         if (res.ok) onToast?.({ message: `Exported ${selectedTrades.length} trade${selectedTrades.length > 1 ? "s" : ""}${res.path ? "" : " to your downloads"}`, tone: "profit" });
         else onToast?.({ message: `Export failed${res.error ? `: ${res.error}` : ""}`, tone: "loss" });
@@ -2483,14 +2487,38 @@ export function JournalPanel({ trades, preferences, setPreferences, onSelectDay,
   // `|| {}` fallback above would be a fresh object every render.
   const entries = useMemo(() => journalEntries(preferences.dayNotes), [preferences.dayNotes]);
 
+  // The filter narrows the list AND every export below — what's on screen is
+  // exactly what a file will hold. Session state on purpose, not a preference:
+  // a filter left set weeks ago would read as vanished entries.
+  const [journalFilter, setJournalFilter] = useState({ from: "", to: "", search: "" });
+  const filterActive = !!(journalFilter.from || journalFilter.to || journalFilter.search.trim());
+  const filtered = useMemo(() => filterJournalEntries(entries, journalFilter), [entries, journalFilter]);
+  const setFilterField = (key) => (e) => setJournalFilter((f) => ({ ...f, [key]: e.target.value }));
+
+  const notifyExport = (res) => {
+    if (!res || res.canceled) return;
+    if (res.ok) onToast?.({ message: `Journal exported${res.path ? "" : " to your downloads"}`, tone: "profit" });
+    else onToast?.({ message: `Export failed${res.error ? `: ${res.error}` : ""}`, tone: "loss" });
+  };
+
   const exportAs = async (kind) => {
     const stamp = isoDate(zonedNow(tz));
-    const res = kind === "md"
-      ? await saveTextExport(`BrijTradeJournal_Journal_${stamp}.md`, journalToMarkdown(dayNotes, byDay), "text/markdown;charset=utf-8")
-      : await saveTextExport(`BrijTradeJournal_Journal_${stamp}.csv`, journalToCSV(dayNotes), "text/csv;charset=utf-8");
-    if (res && !res.canceled) {
-      if (res.ok) onToast?.({ message: `Journal exported${res.path ? "" : " to your downloads"}`, tone: "profit" });
-      else onToast?.({ message: `Export failed${res.error ? `: ${res.error}` : ""}`, tone: "loss" });
+    const scope = filterActive ? "Filtered journal" : "Full journal";
+    const generatedLabel = `${scope} · ${filtered.length} entr${filtered.length === 1 ? "y" : "ies"} · Generated ${fmtDateTime(zonedNow(tz))}`;
+    try {
+      if (kind === "md") notifyExport(await saveTextExport(`TradeJournal_Journal_${stamp}.md`, journalToMarkdown(filtered, byDay), "text/markdown;charset=utf-8"));
+      else if (kind === "csv") notifyExport(await saveTextExport(`TradeJournal_Journal_${stamp}.csv`, journalToCSV(filtered), "text/csv;charset=utf-8"));
+      else if (kind === "word") notifyExport(await saveTextExport(`TradeJournal_Journal_${stamp}.doc`, "﻿" + journalToHtml(filtered, byDay, { forWord: true, generatedLabel }), "application/msword"));
+      else if (kind === "pdf") {
+        const html = journalToHtml(filtered, byDay, { generatedLabel });
+        if (desktop?.isElectron) notifyExport(await desktop.savePDF(`TradeJournal_Journal_${stamp}.pdf`, html));
+        // Web build has no PDF engine — the browser's print dialog is the
+        // "Save as PDF" path, same as the trade report.
+        else printHtmlViaBrowser(html);
+      }
+    } catch (e) {
+      console.error("Journal export failed", e);
+      onToast?.({ message: "Journal export failed", tone: "loss" });
     }
   };
 
@@ -2500,8 +2528,10 @@ export function JournalPanel({ trades, preferences, setPreferences, onSelectDay,
         title="Daily Journal"
         right={
           <div className="journal-toolbar">
-            <button className="btn btn-ghost" disabled={!entries.length} title="Export the journal as Markdown" onClick={() => exportAs("md")}><FileText size={13} /> Markdown</button>
-            <button className="btn btn-ghost" disabled={!entries.length} title="Export the journal as CSV" onClick={() => exportAs("csv")}><FileSpreadsheet size={13} /> CSV</button>
+            <button className="btn btn-ghost" disabled={!filtered.length} title="Export as Markdown" onClick={() => exportAs("md")}><FileText size={13} /> Markdown</button>
+            <button className="btn btn-ghost" disabled={!filtered.length} title="Export as CSV" onClick={() => exportAs("csv")}><FileSpreadsheet size={13} /> CSV</button>
+            <button className="btn btn-ghost" disabled={!filtered.length} title="Export as Word document" onClick={() => exportAs("word")}><FileText size={13} /> Word</button>
+            <button className="btn btn-ghost" disabled={!filtered.length} title="Export as PDF" onClick={() => exportAs("pdf")}><FileDown size={13} /> PDF</button>
           </div>
         }
       >
@@ -2511,11 +2541,25 @@ export function JournalPanel({ trades, preferences, setPreferences, onSelectDay,
             <Pencil size={13} /> {dayNotes[newDate]?.trim() ? "Edit entry" : "Write entry"}
           </button>
         </div>
+        {entries.length > 0 && (
+          <div className="journal-filter-row">
+            <Field label="From"><input type="date" className="input" value={journalFilter.from} onChange={setFilterField("from")} /></Field>
+            <Field label="To"><input type="date" className="input" value={journalFilter.to} onChange={setFilterField("to")} /></Field>
+            <Field label="Search notes"><input className="input" placeholder="Text in a note…" value={journalFilter.search} onChange={setFilterField("search")} /></Field>
+            {filterActive && (
+              <button className="btn btn-ghost journal-filter-clear" onClick={() => setJournalFilter({ from: "", to: "", search: "" })}>
+                <X size={12} /> Clear ({filtered.length} of {entries.length})
+              </button>
+            )}
+          </div>
+        )}
         {entries.length === 0 ? (
           <EmptyState icon={BookOpen} title="No journal entries yet" message="Write a note for any trading day — entries appear here and on that day's calendar cell." />
+        ) : filtered.length === 0 ? (
+          <EmptyState icon={BookOpen} title="No entries match this filter" message="Widen the date range or clear the search — the entries are still here." />
         ) : (
           <div className="journal-list">
-            {entries.map(([date, text]) => {
+            {filtered.map(([date, text]) => {
               const info = byDay[date];
               return (
                 <div className="journal-entry" key={date}>
@@ -2548,6 +2592,57 @@ export function JournalPanel({ trades, preferences, setPreferences, onSelectDay,
           onConfirm={() => saveDayNote(deleteDate, "")} onClose={() => setDeleteDate(null)}
         />
       )}
+    </div>
+  );
+}
+
+/* ============================================================================
+   STRATEGY PLAYBOOK
+   settings.strategyNotes, name → free text, on its own tab (moved out of
+   Settings in 3.3): the playbook is a working document a trader keeps open
+   next to the charts, not a configuration screen. A note survives its
+   strategy being renamed or removed — the name coming back finds it intact
+   (normalizeStrategyNotes keeps orphans).
+============================================================================ */
+// Exported for the component smoke tests (App.test.jsx) — App itself is still
+// the only intended consumer.
+export function PlaybookPanel({ settings, setSettings, strategies, setStrategies, trades = [] }) {
+  const [showStrategyMgr, setShowStrategyMgr] = useState(false);
+  const countByStrategy = useMemo(() => {
+    const m = {};
+    trades.forEach((t) => { if (t.strategy) m[t.strategy] = (m[t.strategy] || 0) + 1; });
+    return m;
+  }, [trades]);
+  return (
+    <div className="stack">
+      <Panel title="Strategy Playbook" right={<button className="btn btn-ghost" onClick={() => setShowStrategyMgr(true)}><SettingsIcon size={13} /> Manage</button>}>
+        <p className="hint" style={{ marginBottom: 12 }}>
+          Describe each strategy — the setup, entry trigger, invalidation, management rules. Notes live in the journal and ride along in backups. A note keeps its text if its strategy is renamed away and back, or removed and re-added.
+        </p>
+        {strategies.length === 0 ? (
+          <div className="hint">No strategies yet — add one with Manage.</div>
+        ) : (
+          <div className="stack" style={{ gap: 10 }}>
+            {/* The trade count sits OUTSIDE the Field <label> — labels take
+                their accessible name from their whole text content, and a
+                count inside would rename every textarea to "ICT 3 trades…". */}
+            {strategies.map((s) => (
+              <div key={s}>
+                <Field label={s}>
+                  <textarea
+                    className="input textarea" rows={3} maxLength={5000}
+                    placeholder="Setup, entry trigger, invalidation, sizing, management…"
+                    value={settings.strategyNotes?.[s] || ""}
+                    onChange={(e) => setSettings((st) => ({ ...st, strategyNotes: { ...st.strategyNotes, [s]: e.target.value } }))}
+                  />
+                </Field>
+                <span className="hint mono playbook-count">{countByStrategy[s] || 0} trade{(countByStrategy[s] || 0) === 1 ? "" : "s"} logged with this strategy</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+      {showStrategyMgr && <StrategyManager strategies={strategies} setStrategies={setStrategies} onClose={() => setShowStrategyMgr(false)} />}
     </div>
   );
 }
@@ -2708,7 +2803,7 @@ function DashboardPanel({ trades, settings, chartMode = "amount", setChartMode }
   );
 }
 
-function AnalyticsPanel({ trades, chartMode, setChartMode }) {
+function AnalyticsPanel({ trades, chartMode, setChartMode, preferences, setPreferences }) {
   // Every figure on this panel derives from `trades` alone. Grouped into one
   // memo so flipping the Amount/Percent toggle re-renders the charts without
   // re-running summarize() once per grade, per strategy and per direction.
@@ -2739,6 +2834,17 @@ function AnalyticsPanel({ trades, chartMode, setChartMode }) {
     };
   }, [trades]);
 
+  const windowed = (rows, count) => (count ? rows.slice(-count) : rows);
+  const periodPicker = (key, label) => (
+    <select
+      className="input chart-period-select" aria-label={label} title={label}
+      value={preferences?.[key] ?? 5}
+      onChange={(e) => setPreferences?.((p) => ({ ...p, [key]: Number(e.target.value) }))}
+    >
+      {CHART_PERIOD_CHOICES.map((n) => <option key={n} value={n}>{n === 0 ? "All" : `Last ${n}`}</option>)}
+    </select>
+  );
+
   return (
     <div className="stack">
       <Panel title="Chart Display" right={<ChartModeToggle mode={chartMode} setMode={setChartMode} />}>
@@ -2749,8 +2855,16 @@ function AnalyticsPanel({ trades, chartMode, setChartMode }) {
         <Panel title="Long vs Short Comparison"><LongShortChart longStats={longStats} shortStats={shortStats} /></Panel>
       </div>
       <div className="two-col">
-        <Panel title="Weekly Performance"><PerformanceBarChart data={weeklyData} labelKey="week" mode={chartMode} /></Panel>
-        <Panel title="Monthly Performance"><MonthlyChart data={monthlyData} mode={chartMode} /></Panel>
+        {/* Both charts window to the most recent N periods (0 = all) so one
+            long-lived journal doesn't compress this year's weeks into slivers.
+            The pick persists with the preferences; slice(-N) works because
+            groupPerformance returns rows sorted ascending by period key. */}
+        <Panel title="Weekly Performance" right={periodPicker("weeklyChartCount", "Weeks shown")}>
+          <PerformanceBarChart data={windowed(weeklyData, preferences?.weeklyChartCount)} labelKey="week" mode={chartMode} />
+        </Panel>
+        <Panel title="Monthly Performance" right={periodPicker("monthlyChartCount", "Months shown")}>
+          <MonthlyChart data={windowed(monthlyData, preferences?.monthlyChartCount)} mode={chartMode} />
+        </Panel>
       </div>
       <div className="two-col">
         <Panel title="Yearly Performance"><PerformanceBarChart data={yearlyData} labelKey="year" mode={chartMode} /></Panel>
@@ -2931,7 +3045,7 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
     // Write to a base64 buffer rather than XLSX.writeFile, so the save routes
     // through the native "Save As" dialog on desktop and a download on web.
     const base64 = XLSX.write(wb, { type: "base64", bookType: "xlsx" });
-    const res = await saveBinaryExport(`BrijTradeJournal_Export_${fileStamp}.xlsx`, base64, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    const res = await saveBinaryExport(`TradeJournal_Export_${fileStamp}.xlsx`, base64, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     notify(res, "Excel workbook");
     } catch (e) {
       console.error("Excel export failed", e);
@@ -2944,7 +3058,7 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
   const exportCSV = async () => {
     setBusy("csv");
     try {
-      const res = await saveTextExport(`BrijTradeJournal_Trades_${fileStamp}.csv`, tradesToCSV(trades), "text/csv;charset=utf-8");
+      const res = await saveTextExport(`TradeJournal_Trades_${fileStamp}.csv`, tradesToCSV(trades), "text/csv;charset=utf-8");
       notify(res, "CSV");
     } catch (e) {
       console.error("CSV export failed", e);
@@ -3010,7 +3124,7 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
     setBusy("word");
     try {
       const html = buildReportHtml(true, await gatherShots());
-      const res = await saveTextExport(`BrijTradeJournal_Report_${fileStamp}.doc`, "﻿" + html, "application/msword");
+      const res = await saveTextExport(`TradeJournal_Report_${fileStamp}.doc`, "﻿" + html, "application/msword");
       notify(res, "Word report");
     } catch (e) {
       console.error("Word export failed", e);
@@ -3025,7 +3139,7 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
     try {
       const html = buildReportHtml(false, await gatherShots());
       if (desktop?.isElectron) {
-        notify(await desktop.savePDF(`BrijTradeJournal_Report_${fileStamp}.pdf`, html), "PDF report");
+        notify(await desktop.savePDF(`TradeJournal_Report_${fileStamp}.pdf`, html), "PDF report");
       } else {
         // Web build has no PDF engine — hand the report to the browser's print
         // dialog, where "Save as PDF" is the destination.
@@ -3098,7 +3212,7 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
 ============================================================================ */
 // Exported for the component smoke tests (App.test.jsx) — App itself is still
 // the only intended consumer.
-export function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, setTheme, strategies, setStrategies, onImportTrades, activeAccountId, setActiveAccountId, preferences, setPreferences }) {
+export function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, setTheme, strategies, onImportTrades, activeAccountId, setActiveAccountId, preferences, setPreferences }) {
   // ~400 zones × an Intl formatter each is a one-time cost taken when Settings
   // mounts, not on every keystroke in the panel. Offsets are "now"-relative
   // (DST), which is as precise as a picker label needs to be.
@@ -3106,7 +3220,6 @@ export function SettingsPanel({ settings, setSettings, trades, replaceAllData, t
   const fileRef = useRef(null);
   const csvRef = useRef(null);
   const [msg, setMsg] = useState("");
-  const [showStrategyMgr, setShowStrategyMgr] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [deleteAccount, setDeleteAccount] = useState(null);
   // A CSV whose rows partly match existing trades waits here for the user to
@@ -3204,7 +3317,7 @@ export function SettingsPanel({ settings, setSettings, trades, replaceAllData, t
     const payload = { app: APP_NAME, settings, strategies, trades: tradesWithShots, exportedAt: new Date().toISOString(), version: 3 };
     // Through the shared export helper like every other file the app writes, so
     // the desktop build gets its native Save As instead of a silent download.
-    const res = await saveTextExport(`BrijTradeJournal_Backup_${isoDate(zonedNow(settings.timezone))}.json`, JSON.stringify(payload), "application/json");
+    const res = await saveTextExport(`TradeJournal_Backup_${isoDate(zonedNow(settings.timezone))}.json`, JSON.stringify(payload), "application/json");
     if (res?.canceled) setMsg("");
     else if (res?.ok) setMsg(`Backup saved${res.path ? "" : " to your downloads"}.`);
     else setMsg(`Backup failed${res?.error ? `: ${res.error}` : ""}.`);
@@ -3364,28 +3477,6 @@ export function SettingsPanel({ settings, setSettings, trades, replaceAllData, t
         </div>
       </Panel>
 
-      <Panel title="Strategy Playbook" right={<button className="btn btn-ghost" onClick={() => setShowStrategyMgr(true)}><SettingsIcon size={13} /> Manage</button>}>
-        <p className="hint" style={{ marginBottom: 12 }}>
-          Describe each strategy — the setup, entry trigger, invalidation, management rules. Notes live in the journal and ride along in backups. A note keeps its text if its strategy is renamed away and back, or removed and re-added.
-        </p>
-        {strategies.length === 0 ? (
-          <div className="hint">No strategies yet — add one with Manage.</div>
-        ) : (
-          <div className="stack" style={{ gap: 10 }}>
-            {strategies.map((s) => (
-              <Field label={s} key={s}>
-                <textarea
-                  className="input textarea" rows={3} maxLength={5000}
-                  placeholder="Setup, entry trigger, invalidation, sizing, management…"
-                  value={settings.strategyNotes?.[s] || ""}
-                  onChange={(e) => setSettings((st) => ({ ...st, strategyNotes: { ...st.strategyNotes, [s]: e.target.value } }))}
-                />
-              </Field>
-            ))}
-          </div>
-        )}
-      </Panel>
-
       <Panel title="Rule Checklist" right={<Badge tone="accent">Per-trade discipline</Badge>}>
         <div className="tag-input-row" style={{ marginBottom: 10 }}>
           <input className="input" placeholder="Add a rule, e.g. Waited for confirmation" value={ruleInput} onChange={(e) => setRuleInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addRule(); } }} />
@@ -3465,7 +3556,6 @@ export function SettingsPanel({ settings, setSettings, trades, replaceAllData, t
           </div>
         </Modal>
       )}
-      {showStrategyMgr && <StrategyManager strategies={strategies} setStrategies={setStrategies} onClose={() => setShowStrategyMgr(false)} />}
     </div>
   );
 }
@@ -3500,6 +3590,7 @@ const NAV = [
   { key: "analytics", label: "Analytics", icon: BarChart3 },
   { key: "calendar", label: "Calendar", icon: CalendarDays },
   { key: "journal", label: "Journal", icon: BookOpen },
+  { key: "playbook", label: "Playbook", icon: Target },
   { key: "reports", label: "Reports", icon: FileDown },
   { key: "settings", label: "Settings", icon: SettingsIcon },
 ];
@@ -4131,7 +4222,7 @@ export default function App() {
             {n.key === "trades" && openCount > 0 && <span className="nav-badge"><Badge tone="accent">{openCount}</Badge></span>}
           </button>
         ))}
-        <div className="sidebar-footer">Data stored locally in this app. Ctrl/Cmd+K — command palette · Ctrl/Cmd+N — new trade · Ctrl/Cmd+1–7 — tabs · Alt+← / → — back &amp; forward · ? — all shortcuts.</div>
+        <div className="sidebar-footer">Data stored locally in this app. Ctrl/Cmd+K — command palette · Ctrl/Cmd+N — new trade · Ctrl/Cmd+1–8 — tabs · Alt+← / → — back &amp; forward · ? — all shortcuts.</div>
       </aside>
 
       <div className="main-col">
@@ -4159,6 +4250,7 @@ export default function App() {
                 {tab === "analytics" && "Deep-dive into edge, direction, grade and strategy"}
                 {tab === "calendar" && "Daily P&L heatmap"}
                 {tab === "journal" && "Daily notes — shared with the calendar's day journal"}
+                {tab === "playbook" && "Your strategies, written down — setup, trigger, invalidation"}
                 {tab === "reports" && "Export professional trading reports"}
                 {tab === "settings" && "Account, appearance and backups"}
               </div>
@@ -4226,14 +4318,15 @@ export default function App() {
           ))}
           {tab === "analytics" && (filtered.length === 0
             ? <EmptyState icon={BarChart3} title="Nothing to analyse" message={filtersActive ? "The current filters leave no trades to chart — loosen them on the Trades tab." : "Analytics needs at least one trade. Log one and the deep-dive builds itself."} />
-            : <AnalyticsPanel trades={filtered} chartMode={preferences.chartMode || "amount"} setChartMode={setChartMode} />)}
+            : <AnalyticsPanel trades={filtered} chartMode={preferences.chartMode || "amount"} setChartMode={setChartMode} preferences={preferences} setPreferences={setPreferences} />)}
           {tab === "calendar" && <PerformanceCalendar trades={scopedTrades} preferences={preferences} setPreferences={setPreferences} onSelectDay={(d) => { setDayFilter(d); setTab("trades"); }} />}
           {tab === "journal" && <JournalPanel trades={scopedTrades} preferences={preferences} setPreferences={setPreferences} onSelectDay={(d) => { setDayFilter(d); setTab("trades"); }} onToast={pushToast} />}
+          {tab === "playbook" && <PlaybookPanel settings={settings} setSettings={setSettings} strategies={strategies} setStrategies={setStrategies} trades={scopedTrades} />}
           {tab === "reports" && <ReportsPanel allTrades={scopedTrades} filteredTrades={filtered} filtersActive={filtersActive} settings={scopedSettings} scopeLabel={activeAccount?.name || (accounts.length > 1 ? "All Accounts" : "")} onToast={pushToast} />}
           {tab === "settings" && (
             <SettingsPanel
               settings={settings} setSettings={setSettings} trades={computedTrades} theme={theme} setTheme={setTheme}
-              strategies={strategies} setStrategies={setStrategies} onImportTrades={importTrades}
+              strategies={strategies} onImportTrades={importTrades}
               activeAccountId={activeAccountId} setActiveAccountId={setActiveAccountId}
               preferences={preferences} setPreferences={setPreferences}
               replaceAllData={async (s, t, strat) => {
@@ -4334,7 +4427,7 @@ function KeyboardShortcutsModal({ onClose }) {
   const rows = [
     ["Ctrl / Cmd + K", "Command palette — actions, tabs, themes, trade search"],
     ["Ctrl / Cmd + N", "New trade"],
-    ["Ctrl / Cmd + 1 – 7", "Jump to a tab (Dashboard … Settings)"],
+    ["Ctrl / Cmd + 1 – 8", "Jump to a tab (Dashboard … Settings)"],
     ["Alt + ←", "Back to the previous tab"],
     ["Alt + →", "Forward again"],
     ["Ctrl / Cmd + B", "Collapse / expand the sidebar"],

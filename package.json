@@ -1,9 +1,9 @@
 {
   "name": "tradingjournal",
   "private": true,
-  "version": "3.2.0",
+  "version": "3.3.0",
   "type": "module",
-  "description": "Brij Trade Journal — local-first trading performance analytics for crypto, forex, commodities, stocks and futures.",
+  "description": "Trade Journal — local-first trading performance analytics for crypto, forex, commodities, stocks and futures.",
   "author": "Brij",
   "main": "electron/main.cjs",
   "scripts": {
@@ -48,7 +48,7 @@
   },
   "build": {
     "appId": "com.trading.journal",
-    "productName": "Brij Trade Journal",
+    "productName": "Trade Journal",
     "publish": null,
     "files": [
       "dist/**/*",

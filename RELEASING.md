@@ -8,7 +8,7 @@ Distribution is a **manual download** of an NSIS installer built on this machine
 2. `npm test` — fully green expected (no `BUG:`-tagged failures outstanding, see [KNOWN_ISSUES.md](KNOWN_ISSUES.md)). Any failure blocks the release.
 3. Drive the app (`npm run electron:dev`) — the shell has no automated coverage.
 4. Bump `version` in `package.json`. **That is the only field a release touches.**
-5. `npm run dist` → `release/Brij Trade Journal Setup <version>.exe`.
+5. `npm run dist` → `release/Trade Journal Setup <version>.exe` (releases before 3.3 shipped as `Brij Trade Journal Setup <version>.exe` — same app, `productName` was rebranded).
 6. Install the built exe and confirm an existing journal still loads.
 
 ## Rules that must not be broken
@@ -30,6 +30,8 @@ Settings > About reads that, so it cannot drift. It used to be typed into App.js
 Changing `name` strands every existing trade. Leave `name` and `build.appId` alone.
 
 `migrateLegacyStorage()` in `electron/main.cjs` is the safety net for builds that already shipped under other names — a one-time copy *in* from `brijtradejournal`, `Brij Trade Journal` and `Trading Journal` when the current storage dir is empty. It is a backstop, not a licence to rename.
+
+`productName` was rebranded from `"Brij Trade Journal"` to `"Trade Journal"` in 3.3. That renames only the exe, installer and Start-menu entry; the journal never moves, because `name` (and therefore `userData`) did not change. Installing 3.3 does **not** uninstall an existing "Brij Trade Journal" copy — Windows sees a differently-named app — so the old entry should be uninstalled manually; both point at the same `%APPDATA%\tradingjournal` data either way. The 3.3 release also replaced `build/icon.ico` (candlestick-chart-on-monitor art).
 
 ### `build.publish: null` is deliberate
 

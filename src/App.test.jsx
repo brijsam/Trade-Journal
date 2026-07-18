@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { TradeForm, TradesTable, JournalPanel, SettingsPanel } from "./App";
+import { TradeForm, TradesTable, JournalPanel, PlaybookPanel } from "./App";
 import { computeTrade, DEFAULT_PREFERENCES, DEFAULT_SETTINGS, fmtDate, parseLocalInputValue } from "./lib/trade";
 
 afterEach(cleanup);
@@ -253,38 +253,55 @@ describe("JournalPanel — daily journal", () => {
 
   it("only offers export once there is something to export", () => {
     const { rerender } = render(<JournalPanel {...journalProps()} />);
-    expect(screen.getByRole("button", { name: /markdown/i }).disabled).toBe(true);
-    expect(screen.getByRole("button", { name: /^csv$/i }).disabled).toBe(true);
+    ["markdown", "csv", "word", "pdf"].forEach((name) => {
+      expect(screen.getByRole("button", { name: new RegExp(`^${name}$`, "i") }).disabled).toBe(true);
+    });
 
     rerender(<JournalPanel {...journalProps({ preferences: { ...DEFAULT_PREFERENCES, dayNotes: { "2026-07-17": "Note." } } })} />);
-    expect(screen.getByRole("button", { name: /markdown/i }).disabled).toBe(false);
-    expect(screen.getByRole("button", { name: /^csv$/i }).disabled).toBe(false);
+    ["markdown", "csv", "word", "pdf"].forEach((name) => {
+      expect(screen.getByRole("button", { name: new RegExp(`^${name}$`, "i") }).disabled).toBe(false);
+    });
+  });
+
+  it("filters the visible entries by note text and offers a clear chip", async () => {
+    const user = userEvent.setup();
+    render(<JournalPanel {...journalProps({
+      preferences: { ...DEFAULT_PREFERENCES, dayNotes: { "2026-07-17": "Trend day.", "2026-07-15": "Chop, stood aside." } },
+    })} />);
+    expect(document.querySelectorAll(".journal-entry")).toHaveLength(2);
+
+    await user.type(screen.getByLabelText(/search notes/i), "chop");
+    expect(document.querySelectorAll(".journal-entry")).toHaveLength(1);
+    expect(screen.getByText(/clear \(1 of 2\)/i)).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: /clear \(1 of 2\)/i }));
+    expect(document.querySelectorAll(".journal-entry")).toHaveLength(2);
+  });
+
+  it("shows a no-match state instead of the empty state when the filter excludes everything", async () => {
+    const user = userEvent.setup();
+    render(<JournalPanel {...journalProps({ preferences: { ...DEFAULT_PREFERENCES, dayNotes: { "2026-07-17": "Trend day." } } })} />);
+    await user.type(screen.getByLabelText(/search notes/i), "nothing matches this");
+    expect(screen.getByText(/no entries match this filter/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^pdf$/i }).disabled).toBe(true);
   });
 });
 
-// The playbook is settings.strategyNotes, name -> text, edited inline in
-// Settings. These assert the per-strategy field wiring; normalization
-// (blank-dropping, length cap) is covered in lib/trade.test.js.
-describe("SettingsPanel — Strategy Playbook", () => {
-  const settingsProps = (overrides = {}) => ({
+// The playbook is settings.strategyNotes, name -> text, on its own tab.
+// These assert the per-strategy field wiring; normalization (blank-dropping,
+// length cap) is covered in lib/trade.test.js.
+describe("PlaybookPanel — Strategy Playbook", () => {
+  const playbookProps = (overrides = {}) => ({
     settings: DEFAULT_SETTINGS,
     setSettings: vi.fn(),
-    trades: [],
-    replaceAllData: vi.fn(),
-    theme: "dark",
-    setTheme: vi.fn(),
     strategies: ["ICT", "Scalping"],
     setStrategies: vi.fn(),
-    onImportTrades: vi.fn(),
-    activeAccountId: "",
-    setActiveAccountId: vi.fn(),
-    preferences: DEFAULT_PREFERENCES,
-    setPreferences: vi.fn(),
+    trades: [],
     ...overrides,
   });
 
   it("shows one note field per strategy, prefilled from settings", () => {
-    render(<SettingsPanel {...settingsProps({ settings: { ...DEFAULT_SETTINGS, strategyNotes: { ICT: "Liquidity sweep entry." } } })} />);
+    render(<PlaybookPanel {...playbookProps({ settings: { ...DEFAULT_SETTINGS, strategyNotes: { ICT: "Liquidity sweep entry." } } })} />);
     expect(screen.getByLabelText("ICT").value).toBe("Liquidity sweep entry.");
     expect(screen.getByLabelText("Scalping").value).toBe("");
   });
@@ -297,15 +314,34 @@ describe("SettingsPanel — Strategy Playbook", () => {
     // "", not what was typed.
     let captured;
     const setSettings = vi.fn((updater) => { captured = updater({ strategyNotes: { ICT: "Old note" } }); });
-    render(<SettingsPanel {...settingsProps({ settings: { ...DEFAULT_SETTINGS, strategyNotes: { ICT: "Old note" } }, setSettings })} />);
+    render(<PlaybookPanel {...playbookProps({ settings: { ...DEFAULT_SETTINGS, strategyNotes: { ICT: "Old note" } }, setSettings })} />);
 
     fireEvent.change(screen.getByLabelText("Scalping"), { target: { value: "Quick in and out." } });
 
     expect(captured.strategyNotes).toEqual({ ICT: "Old note", Scalping: "Quick in and out." });
   });
 
+  it("counts the trades logged with each strategy", () => {
+    const trade = (id, strategy) => computeTrade({
+      id, symbol: "BTCUSDT", direction: "Long", status: "Closed", marketType: "Crypto", grade: "B",
+      entryPrice: "100", exitPrice: "110", positionSize: "1",
+      entryDateTime: "2026-07-10T09:00", exitDateTime: "2026-07-10T11:00", strategy,
+    });
+    const { container } = render(<PlaybookPanel {...playbookProps({ trades: [trade("TJ-1", "ICT"), trade("TJ-2", "ICT"), trade("TJ-3", "Scalping")] })} />);
+    const hints = [...container.querySelectorAll(".playbook-count")].map((h) => h.textContent);
+    expect(hints[0]).toContain("2 trades logged");
+    expect(hints[1]).toContain("1 trade logged");
+  });
+
   it("prompts to add a strategy first when the list is empty", () => {
-    render(<SettingsPanel {...settingsProps({ strategies: [] })} />);
+    render(<PlaybookPanel {...playbookProps({ strategies: [] })} />);
     expect(screen.getByText(/no strategies yet — add one with manage/i)).toBeTruthy();
+  });
+
+  it("opens the strategy manager from the panel's Manage button", async () => {
+    const user = userEvent.setup();
+    render(<PlaybookPanel {...playbookProps()} />);
+    await user.click(screen.getByRole("button", { name: /manage/i }));
+    expect(await screen.findByText(/manage strategies/i)).toBeTruthy();
   });
 });

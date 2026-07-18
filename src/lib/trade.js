@@ -62,7 +62,15 @@ export const DEFAULT_CALENDAR = { view: "monthly", cursor: "", dateFrom: "", dat
 // every tab switch, so component state alone forgets both.
 export const PAGE_SIZES = [25, 50, 100];
 export const DEFAULT_TABLE_SORT = { key: "entryDateTime", dir: "desc" };
-export const DEFAULT_PREFERENCES = { filters: DEFAULT_FILTERS, calendar: DEFAULT_CALENDAR, selectedTab: "dashboard", calendarView: "monthly", calendarCursor: "", dashboardLayout: "standard", dayNotes: {}, chartMode: "amount", sidebarCollapsed: false, activeAccountId: "", zoom: 1, density: "comfortable", hiddenColumns: [], accent: "", tableSort: DEFAULT_TABLE_SORT, pageSize: 50, clockFormat: "12h" };
+export const DEFAULT_PREFERENCES = { filters: DEFAULT_FILTERS, calendar: DEFAULT_CALENDAR, selectedTab: "dashboard", calendarView: "monthly", calendarCursor: "", dashboardLayout: "standard", dayNotes: {}, chartMode: "amount", sidebarCollapsed: false, activeAccountId: "", zoom: 1, density: "comfortable", hiddenColumns: [], accent: "", tableSort: DEFAULT_TABLE_SORT, pageSize: 50, clockFormat: "12h", weeklyChartCount: 5, monthlyChartCount: 5 };
+
+// The Analytics weekly/monthly charts show only the most recent N periods
+// (0 = all). The ladder the pickers offer; anything stored outside it falls
+// back to the 5-period default so a hand-edited value can't blank a chart.
+export const CHART_PERIOD_CHOICES = [3, 5, 8, 12, 0];
+export function normalizeChartCount(value) {
+  return CHART_PERIOD_CHOICES.includes(value) ? value : 5;
+}
 
 // A stored accent is only ever a six-digit hex colour or "the theme's own".
 // Anything else — a hand-edited backup, an old shorthand — falls back to ""
@@ -331,6 +339,8 @@ export function mergePreferences(preferences) {
     zoom: clampZoom(prefs.zoom ?? 1),
     density: prefs.density === "compact" ? "compact" : "comfortable",
     clockFormat: prefs.clockFormat === "24h" ? "24h" : "12h",
+    weeklyChartCount: normalizeChartCount(prefs.weeklyChartCount),
+    monthlyChartCount: normalizeChartCount(prefs.monthlyChartCount),
     hiddenColumns: Array.isArray(prefs.hiddenColumns) ? prefs.hiddenColumns.filter((k) => typeof k === "string") : [],
     accent: normalizeAccent(prefs.accent),
     // Guaranteed shapes, whatever was stored: a junk sort key still sorts (the
@@ -621,18 +631,50 @@ export function journalEntries(dayNotes) {
     .filter(([key, text]) => /^\d{4}-\d{2}-\d{2}$/.test(key) && typeof text === "string" && text.trim())
     .sort((a, b) => (a[0] < b[0] ? 1 : -1));
 }
-// byDay is optional { [dayKey]: { pnl, count } } — when given, each entry's
-// heading carries that day's trading result next to the note.
-export function journalToMarkdown(dayNotes, byDay = {}) {
-  const blocks = journalEntries(dayNotes).map(([date, text]) => {
+/* The Journal tab's filter, applied to the list AND every export so what you
+   see is exactly what a file will hold: an inclusive day-key range plus a
+   case-insensitive text match on the note. Day keys compare lexically, which
+   for YYYY-MM-DD is date order. An empty filter passes everything. */
+export function filterJournalEntries(entries, { from = "", to = "", search = "" } = {}) {
+  const q = search.trim().toLowerCase();
+  return entries.filter(([date, text]) => {
+    if (from && date < from) return false;
+    if (to && date > to) return false;
+    if (q && !text.toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+/* The exporters below take the entries ARRAY (from journalEntries, optionally
+   through filterJournalEntries), not the raw dayNotes map — the Journal tab
+   filters before exporting, and re-deriving inside each exporter would undo
+   that. byDay is optional { [dayKey]: { pnl, count } } — when given, each
+   entry's heading carries that day's trading result next to the note. */
+export function journalToMarkdown(entries, byDay = {}) {
+  const blocks = entries.map(([date, text]) => {
     const info = byDay[date];
     const stats = info ? ` — ${info.count} trade${info.count === 1 ? "" : "s"}, P&L ${info.pnl < 0 ? "-" : "+"}$${Math.abs(info.pnl).toFixed(2)}` : "";
     return `## ${date}${stats}\n\n${text.trim()}`;
   });
   return `# Trading Journal\n\n${blocks.join("\n\n")}\n`;
 }
-export function journalToCSV(dayNotes) {
-  return ["Date,Note", ...journalEntries(dayNotes).map(([date, text]) => `${date},${csvCell(text.trim())}`)].join("\n");
+export function journalToCSV(entries) {
+  return ["Date,Note", ...entries.map(([date, text]) => `${date},${csvCell(text.trim())}`)].join("\n");
+}
+/* One HTML document for the Word (.doc) and PDF journal exports, mirroring the
+   trade report's split: forWord adds the Office namespaces Word wants, the PDF
+   path gets @page sizing instead. Note text is user free text and is escaped;
+   the date needs no escaping — journalEntries only passes YYYY-MM-DD keys. */
+export function journalToHtml(entries, byDay = {}, { title = "Trading Journal", forWord = false, generatedLabel = "" } = {}) {
+  const blocks = entries.map(([date, text]) => {
+    const info = byDay[date];
+    const stats = info ? ` — ${info.count} trade${info.count === 1 ? "" : "s"}, P&amp;L ${info.pnl < 0 ? "-" : "+"}$${Math.abs(info.pnl).toFixed(2)}` : "";
+    return `<h2>${date}${stats}</h2><p>${escapeHtml(text.trim()).replace(/\n/g, "<br/>")}</p>`;
+  }).join("");
+  const nsAttrs = forWord ? " xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'" : "";
+  const pageCss = forWord ? "" : "@page{size:A4;margin:14mm;} ";
+  return `<html${nsAttrs}><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>` +
+    `<style>${pageCss}body{font-family:Calibri,Arial,sans-serif;color:#1a1a1a;} h1{color:#161A22;margin-bottom:0;} h2{border-bottom:2px solid #3E8FFF;padding-bottom:4px;font-size:15px;} p{font-size:12px;line-height:1.5;}</style></head>` +
+    `<body><h1>${escapeHtml(title)}</h1>${generatedLabel ? `<p style="color:#888;margin-top:2px">${escapeHtml(generatedLabel)}</p>` : ""}${blocks}</body></html>`;
 }
 export function csvCell(value) {
   const s = value === null || value === undefined ? "" : String(value);

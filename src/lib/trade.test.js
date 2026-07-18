@@ -26,7 +26,8 @@ import {
   isoDate, isoWeekKey, monthKey, weekOfMonthKey, durationLabel,
   dateInRange, dateRangeForPreset, startOfWeek, toLocalInputValue,
   zonedNow, isValidTimeZone, normalizeTimezone, tzOffsetLabel,
-  journalEntries, journalToMarkdown, journalToCSV,
+  journalEntries, journalToMarkdown, journalToCSV, journalToHtml, filterJournalEntries,
+  normalizeChartCount, CHART_PERIOD_CHOICES,
   emptyTrade, tradeToForm, withDerivedFills, formSignature, tradeWarnings,
 } from "./trade";
 
@@ -508,6 +509,16 @@ describe("mergePreferences", () => {
     expect(mergePreferences({}).clockFormat).toBe("12h");
     expect(mergePreferences({ clockFormat: "24h" }).clockFormat).toBe("24h");
     expect(mergePreferences({ clockFormat: "military" }).clockFormat).toBe("12h");
+  });
+
+  // The weekly/monthly chart windows only accept values the pickers offer
+  // (0 = all periods); anything else falls back to the 5-period default.
+  it("constrains the analytics chart period counts to the picker's ladder", () => {
+    expect(mergePreferences({}).weeklyChartCount).toBe(5);
+    expect(mergePreferences({}).monthlyChartCount).toBe(5);
+    expect(mergePreferences({ weeklyChartCount: 12, monthlyChartCount: 0 })).toMatchObject({ weeklyChartCount: 12, monthlyChartCount: 0 });
+    expect(mergePreferences({ weeklyChartCount: 7, monthlyChartCount: "9" })).toMatchObject({ weeklyChartCount: 5, monthlyChartCount: 5 });
+    CHART_PERIOD_CHOICES.forEach((n) => expect(normalizeChartCount(n)).toBe(n));
   });
 
   it("backfills filters a stored preference set is missing", () => {
@@ -1113,13 +1124,14 @@ describe("daily journal export", () => {
     "2026-07-16": "   ",              // blank — never exported
     "junk-key": "not a day note",
   };
+  const entries = () => journalEntries(notes);
 
   it("orders entries newest first and drops blanks and non-day keys", () => {
-    expect(journalEntries(notes).map(([d]) => d)).toEqual(["2026-07-17", "2026-07-15"]);
+    expect(entries().map(([d]) => d)).toEqual(["2026-07-17", "2026-07-15"]);
   });
 
   it("renders markdown with a day's trading result on the heading", () => {
-    const md = journalToMarkdown(notes, { "2026-07-17": { pnl: 150, count: 2 }, "2026-07-15": { pnl: -25.5, count: 1 } });
+    const md = journalToMarkdown(entries(), { "2026-07-17": { pnl: 150, count: 2 }, "2026-07-15": { pnl: -25.5, count: 1 } });
     expect(md).toContain("## 2026-07-17 — 2 trades, P&L +$150.00");
     expect(md).toContain("## 2026-07-15 — 1 trade, P&L -$25.50");
     expect(md.indexOf("2026-07-17")).toBeLessThan(md.indexOf("2026-07-15"));
@@ -1127,16 +1139,54 @@ describe("daily journal export", () => {
   });
 
   it("leaves the heading bare for a day with no trades", () => {
-    expect(journalToMarkdown({ "2026-07-15": "note" })).toContain("## 2026-07-15\n");
+    expect(journalToMarkdown(journalEntries({ "2026-07-15": "note" }))).toContain("## 2026-07-15\n");
   });
 
   // A multi-line note must survive the CSV round trip — same quoting rules
   // as the trade export, so parseCSV reads it back intact.
   it("round-trips a multi-line note through CSV quoting", () => {
-    const csv = journalToCSV(notes);
+    const csv = journalToCSV(entries());
     const rows = parseCSV(csv);
     expect(rows[0]).toEqual({ Date: "2026-07-17", Note: "Clean trend day.\nTook both setups." });
     expect(rows).toHaveLength(2);
+  });
+
+  it("filters by inclusive day range and case-insensitive note text", () => {
+    expect(filterJournalEntries(entries(), { from: "2026-07-16" }).map(([d]) => d)).toEqual(["2026-07-17"]);
+    expect(filterJournalEntries(entries(), { to: "2026-07-15" }).map(([d]) => d)).toEqual(["2026-07-15"]);
+    expect(filterJournalEntries(entries(), { from: "2026-07-15", to: "2026-07-17" })).toHaveLength(2);
+    expect(filterJournalEntries(entries(), { search: "CHOPPY" }).map(([d]) => d)).toEqual(["2026-07-15"]);
+    expect(filterJournalEntries(entries(), {})).toHaveLength(2);
+  });
+
+  // The filter feeds the exporters directly — a filtered export must hold
+  // exactly the filtered entries, nothing re-derived from the full map.
+  it("exports only the filtered entries", () => {
+    const filtered = filterJournalEntries(entries(), { search: "trend" });
+    const md = journalToMarkdown(filtered);
+    expect(md).toContain("2026-07-17");
+    expect(md).not.toContain("2026-07-15");
+  });
+
+  it("escapes note free text in the HTML export but keeps the stats heading", () => {
+    const html = journalToHtml(
+      journalEntries({ "2026-07-17": "P&L <b>bold</b> day.\nSecond line." }),
+      { "2026-07-17": { pnl: 150, count: 2 } },
+      { generatedLabel: "Generated today" },
+    );
+    expect(html).toContain("<h2>2026-07-17 — 2 trades, P&amp;L +$150.00</h2>");
+    expect(html).toContain("P&amp;L &lt;b&gt;bold&lt;/b&gt; day.<br/>Second line.");
+    expect(html).toContain("Generated today");
+    expect(html).not.toContain("<b>bold</b>");
+  });
+
+  it("adds Office namespaces only for the Word variant", () => {
+    const word = journalToHtml(entries(), {}, { forWord: true });
+    const pdf = journalToHtml(entries(), {}, { forWord: false });
+    expect(word).toContain("schemas-microsoft-com:office:word");
+    expect(word).not.toContain("@page");
+    expect(pdf).toContain("@page{size:A4");
+    expect(pdf).not.toContain("schemas-microsoft-com");
   });
 });
 
