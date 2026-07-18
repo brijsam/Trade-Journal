@@ -197,7 +197,7 @@ The setting reaches leaf components through `TimezoneContext` in App.jsx (defaul
 
 ## Navigation
 
-Tabs are plain state in the root `App` (`setTab`), with an in-memory back/forward history behind the topbar arrows and Alt+←/→ (deliberately not persisted: restoring a stale stack would let Back lead somewhere the user never went this session). Ctrl/Cmd+1–6 jumps straight to a tab; both paths are gated while a dialog is open so navigation can't strand unsaved edits underneath one.
+Tabs are plain state in the root `App` (`setTab`), with an in-memory back/forward history behind the topbar arrows and Alt+←/→ (deliberately not persisted: restoring a stale stack would let Back lead somewhere the user never went this session). Ctrl/Cmd+1–7 jumps straight to a tab; both paths are gated on `!showForm && !viewing && openDialogCount === 0`, so navigation can't unmount an open dialog — the trade form, the trade detail view, or any `Modal` instance (confirms, the day-note editor, strategy manager, keyboard shortcuts…) — out from under unsaved edits. `openDialogCount` is a second module-level reference count next to `useBodyScrollLock`'s (same file, same pattern), deliberately *not* the same one: `CommandPalette` holds the scroll lock too, since it's allowed to open over a modal, but it isn't a dialog with edits to strand, so it must not gate navigation.
 
 Tab switches run through `withTabTransition`, which uses the View Transitions API (`document.startViewTransition` + `flushSync`) for a ~140ms crossfade where the browser supports it — skipped under `prefers-reduced-motion`, plain synchronous update otherwise.
 

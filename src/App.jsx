@@ -509,6 +509,8 @@ const APP_CSS = `
 .calendar-dow { margin-bottom: 4px; }
 .calendar-dow-cell { font-size: 10px; text-align: center; color: var(--text-muted); font-weight: 600; }
 .calendar-cell { position: relative; aspect-ratio: 1; border: 1px solid var(--border-soft); border-radius: 8px; background: transparent; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer; padding: 4px; }
+.calendar-cell-today { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.calendar-cell-today .calendar-daynum { color: var(--accent); font-weight: 700; }
 .calendar-cell-empty { border: none; cursor: default; }
 .calendar-daynum { font-size: 10.5px; color: var(--text-muted); align-self: flex-start; }
 .calendar-pnl { font-size: 10.5px; font-weight: 700; }
@@ -834,9 +836,26 @@ function useBodyScrollLock() {
     };
   }, []);
 }
+/* How many Modal instances are currently mounted — every ConfirmModal,
+   DayNoteModal, StrategyManager, TradeCompareModal, KeyboardShortcutsModal and
+   the trade form itself, since they all render through this one component.
+   Deliberately separate from bodyScrollLockCount: CommandPalette shares that
+   lock too (it's allowed to open over any of these), but the palette is not a
+   dialog whose unsaved edits navigation could strand, so it must not hold
+   this count. Read imperatively — like bodyScrollLockCount, and the trades
+   table's own document.body.style.overflow check — by App's keydown handler,
+   so switching tabs or navigating history can't unmount one of these mid-edit. */
+let openDialogCount = 0;
+function useOpenDialogCount() {
+  useEffect(() => {
+    openDialogCount++;
+    return () => { openDialogCount--; };
+  }, []);
+}
 function Modal({ title, onClose, children, wide }) {
   const panelRef = useRef(null);
   useBodyScrollLock();
+  useOpenDialogCount();
   // Hold focus inside the dialog. Without this, Tab walks off into the page
   // underneath and that page scrolls with it.
   useEffect(() => {
@@ -2292,12 +2311,17 @@ function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences 
     const intensity = Math.min(1, Math.abs(pnl) / max);
     return pnl >= 0 ? `rgba(34,197,94,${0.12 + intensity * 0.35})` : `rgba(240,69,91,${0.12 + intensity * 0.35})`;
   };
+  // Same day key the daily view's own "Today" label uses, computed once per
+  // render rather than per cell — every cell in the weekly/monthly grid shares
+  // this one comparison.
+  const todayKey = isoDate(zonedNow(tz));
   // One day cell, shared by the weekly and monthly grids.
   const dayCell = (key, label, i) => {
     const info = byDay[key];
+    const isToday = key === todayKey;
     return (
       <div
-        key={i} className="calendar-cell" style={{ background: info ? heatBg(info.pnl, maxAbs) : "transparent" }} role="button" tabIndex={0}
+        key={i} className={`calendar-cell ${isToday ? "calendar-cell-today" : ""}`} style={{ background: info ? heatBg(info.pnl, maxAbs) : "transparent" }} role="button" tabIndex={0}
         onClick={() => info && onSelectDay(key)}
         onKeyDown={(e) => { if (info && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onSelectDay(key); } }}
       >
@@ -2348,7 +2372,7 @@ function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences 
         {calendarView === "daily" && (() => {
           const key = isoDate(cursor);
           const info = byDay[key];
-          const isToday = key === isoDate(zonedNow(tz));
+          const isToday = key === todayKey;
           return (
             <div className="day-focus" style={{ background: info ? heatBg(info.pnl, Math.max(1, Math.abs(info.pnl))) : "transparent" }}>
               <div className="day-focus-head">
@@ -3738,7 +3762,11 @@ export default function App() {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && !showForm) { e.preventDefault(); setShowPalette((s) => !s); }
       // Ctrl+1..6 jumps straight to a tab, browser-style. Gated like Alt+Arrow:
       // switching the page under an open dialog would strand unsaved edits.
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && !typing && !showForm && !viewing) {
+      // openDialogCount covers every Modal-based dialog (confirms, the day-note
+      // editor, strategy manager, shortcuts…), not just the trade form and the
+      // trade detail view — those two are called out separately only because
+      // they aren't state a generic Modal instance carries.
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !typing && !showForm && !viewing && openDialogCount === 0) {
         const n = Number(e.key);
         if (Number.isInteger(n) && n >= 1 && n <= NAV.length) { e.preventDefault(); setTab(NAV[n - 1].key); }
       }
@@ -3752,7 +3780,7 @@ export default function App() {
       // Alt+Arrow is the platform convention for history. Gated on a dialog
       // being closed: navigating the page underneath an open form would strand
       // the user's unsaved edits over a tab they can't see.
-      if (e.altKey && !typing && !showForm && !viewing && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      if (e.altKey && !typing && !showForm && !viewing && openDialogCount === 0 && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
         e.preventDefault();
         goHistory(e.key === "ArrowLeft" ? -1 : 1);
       }
