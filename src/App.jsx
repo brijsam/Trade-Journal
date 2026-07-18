@@ -807,14 +807,40 @@ function Card({ label, value, icon: Icon, sub, accentColor, help }) {
 }
 function Badge({ children, tone = "neutral" }) { return <span className={`badge badge-${tone}`}>{children}</span>; }
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+/* Shared, reference-counted body-scroll lock. The command palette is designed
+   to open on top of any modal (see .palette-overlay's z-index below it isn't
+   gated on "no other dialog is open" anywhere), so two lockers can legitimately
+   be alive at once. Each one independently snapshotting and restoring
+   document.body.style.overflow is exactly the bug this replaces: if the first
+   dialog opened is also the first *closed* (e.g. a tab switch unmounts a
+   Journal/Calendar note modal while the palette opened on top of it is still
+   up), that snapshot-and-restore pair fires out of stacking order and the
+   second closer then restores its own stale "hidden" snapshot — leaving the
+   body permanently unscrollable with no dialog left open to blame. Counting
+   openers and only touching the DOM at 0->1 and 1->0 makes every close order
+   safe, including this one. */
+let bodyScrollLockCount = 0;
+let bodyScrollLockPrevOverflow = "";
+function useBodyScrollLock() {
+  useEffect(() => {
+    if (bodyScrollLockCount === 0) {
+      bodyScrollLockPrevOverflow = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+    }
+    bodyScrollLockCount++;
+    return () => {
+      bodyScrollLockCount--;
+      if (bodyScrollLockCount === 0) document.body.style.overflow = bodyScrollLockPrevOverflow;
+    };
+  }, []);
+}
 function Modal({ title, onClose, children, wide }) {
   const panelRef = useRef(null);
-  // Hold focus inside the dialog and freeze the page behind it. Without this,
-  // Tab walks off into the page underneath and that page scrolls with it.
+  useBodyScrollLock();
+  // Hold focus inside the dialog. Without this, Tab walks off into the page
+  // underneath and that page scrolls with it.
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
     const previouslyFocused = document.activeElement;
-    document.body.style.overflow = "hidden";
     // Anything with its own autoFocus has already claimed focus by now; only
     // take it if nothing inside the dialog has it.
     if (!panelRef.current?.contains(document.activeElement)) panelRef.current?.focus();
@@ -829,7 +855,6 @@ function Modal({ title, onClose, children, wide }) {
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = previousOverflow;
       if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
     };
   }, []);
@@ -4316,12 +4341,10 @@ function CommandPalette({ actions, trades, onOpenTrade, onClose }) {
   const [sel, setSel] = useState(0);
   const listRef = useRef(null);
 
-  // Freeze the page behind the overlay, same as Modal.
-  useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = previousOverflow; };
-  }, []);
+  // Freeze the page behind the overlay, same as Modal — through the same
+  // shared lock, since the palette can be opened on top of a modal and the two
+  // locks must not fight over restoring document.body.style.overflow.
+  useBodyScrollLock();
 
   const results = useMemo(() => {
     const q = query.trim();

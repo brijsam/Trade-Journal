@@ -203,6 +203,8 @@ Tab switches run through `withTabTransition`, which uses the View Transitions AP
 
 **Trades-table row cursor** — J/K or ↑/↓ move a highlighted row on the visible page; Enter views it, E edits, X toggles its selection. The listener stands down whenever `document.body.style.overflow` is `"hidden"` — every overlay (Modal, palette) freezes body scroll, so that one check covers "something is open above the table" without the table knowing about any of them. The cursor is clamped at read time rather than reset by an effect when sorting or filtering shrinks the list.
 
+The freeze itself is `useBodyScrollLock()` — one module-level reference count shared by every `Modal` instance and `CommandPalette`, not each locking and restoring independently. The palette is deliberately allowed to open *on top of* a modal (Ctrl/Cmd+K works from inside a dialog), so two lockers being alive at once is normal; only the count reaching 0 touches the DOM, so whichever order they close in, the body ends up correctly unlocked. Two independent locks used to do this — closing the modal before the palette that opened on top of it left the body at `overflow: hidden` forever, with nothing left open to blame. See [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+
 **Command palette** — Ctrl/Cmd+K. Actions (new trade, tab jumps, sidebar, shortcuts, the 12 themes) plus a live trade search over the whole journal (id / symbol / direction / status / market / strategy / tags / account — global on purpose, not scoped to the account in view). Matching and ranking are `paletteFilter()` in `lib/trade.js` — pure, token-AND, word-start-over-mid-word — pinned by tests; the component in App.jsx is just the shell. With no query only the leading actions show, so the idle list stays short.
 
 ## Styling
