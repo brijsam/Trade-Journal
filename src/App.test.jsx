@@ -10,10 +10,10 @@
  * (the pragma above); the lib suite stays in plain Node.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { TradeForm, TradesTable } from "./App";
-import { computeTrade } from "./lib/trade";
+import { TradeForm, TradesTable, JournalPanel, SettingsPanel } from "./App";
+import { computeTrade, DEFAULT_PREFERENCES, DEFAULT_SETTINGS, fmtDate, parseLocalInputValue } from "./lib/trade";
 
 afterEach(cleanup);
 
@@ -167,5 +167,145 @@ describe("TradesTable — smoke", () => {
   it("hides a switched-off column", () => {
     render(<TradesTable {...tableProps([closedTrade("TJ-00001", "BTCUSDT", "110")], { hiddenColumns: ["grade"] })} />);
     expect(screen.queryByText("Grade")).toBeNull();
+  });
+});
+
+// The Journal tab and the calendar's day notes edit the same
+// preferences.dayNotes map — these only assert JournalPanel's own wiring onto
+// that map (write, delete, list) and its trade-stats lookup; the map itself
+// and the export formats are covered in lib/trade.test.js.
+describe("JournalPanel — daily journal", () => {
+  const closedTrade = (id, exitDateTime) => computeTrade({
+    id, symbol: "BTCUSDT", direction: "Long", status: "Closed", marketType: "Crypto", grade: "B",
+    entryPrice: "100", exitPrice: "110", positionSize: "1",
+    entryDateTime: "2026-07-17T09:00", exitDateTime,
+  });
+  const journalProps = (overrides = {}) => ({
+    trades: [],
+    preferences: DEFAULT_PREFERENCES,
+    setPreferences: vi.fn(),
+    onSelectDay: vi.fn(),
+    onToast: vi.fn(),
+    ...overrides,
+  });
+
+  it("shows the empty state with no entries", () => {
+    render(<JournalPanel {...journalProps()} />);
+    expect(screen.getByText(/no journal entries yet/i)).toBeTruthy();
+  });
+
+  it("writes a new entry for the prefilled date through the same DayNoteModal the calendar uses", async () => {
+    const user = userEvent.setup();
+    const props = journalProps();
+    render(<JournalPanel {...props} />);
+
+    await user.click(screen.getByRole("button", { name: /write entry/i }));
+    await user.type(screen.getByPlaceholderText(/market conditions/i), "Choppy session, stood aside.");
+    await user.click(screen.getByRole("button", { name: /save note/i }));
+
+    const updater = props.setPreferences.mock.calls.at(-1)[0];
+    const next = updater(DEFAULT_PREFERENCES);
+    expect(Object.values(next.dayNotes)).toEqual(["Choppy session, stood aside."]);
+  });
+
+  it("lists entries newest first, each with that day's trade stats", () => {
+    const { container } = render(<JournalPanel {...journalProps({
+      trades: [closedTrade("TJ-1", "2026-07-17T11:00")],
+      preferences: { ...DEFAULT_PREFERENCES, dayNotes: { "2026-07-15": "Stood aside.", "2026-07-17": "Took the trade." } },
+    })} />);
+
+    // fmtDate's rendering is locale-dependent (day-month-year on this machine's
+    // default locale) — compare against the same helper rather than a literal
+    // string, and rely on document order for "newest first".
+    const heads = [...container.querySelectorAll(".journal-entry-head")].map((h) => h.textContent);
+    expect(heads[0]).toContain(fmtDate(parseLocalInputValue("2026-07-17")));
+    expect(heads[0]).toMatch(/1 trade/);
+    expect(heads[0]).toContain("+$10.00");
+    expect(heads[1]).toContain(fmtDate(parseLocalInputValue("2026-07-15")));
+    expect(heads[1]).toMatch(/no closed trades/i);
+  });
+
+  it("'View trades' hands the day key to onSelectDay", async () => {
+    const user = userEvent.setup();
+    const props = journalProps({
+      trades: [closedTrade("TJ-1", "2026-07-17T11:00")],
+      preferences: { ...DEFAULT_PREFERENCES, dayNotes: { "2026-07-17": "Took the trade." } },
+    });
+    render(<JournalPanel {...props} />);
+
+    await user.click(screen.getByRole("button", { name: /view trades/i }));
+    expect(props.onSelectDay).toHaveBeenCalledWith("2026-07-17");
+  });
+
+  it("deleting an entry clears its text rather than dropping the key silently", async () => {
+    const user = userEvent.setup();
+    const props = journalProps({ preferences: { ...DEFAULT_PREFERENCES, dayNotes: { "2026-07-17": "Took the trade." } } });
+    render(<JournalPanel {...props} />);
+
+    await user.click(screen.getByRole("button", { name: /delete entry for 2026-07-17/i }));
+    expect(await screen.findByText(/delete the note for 2026-07-17/i)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+
+    const updater = props.setPreferences.mock.calls.at(-1)[0];
+    const next = updater({ dayNotes: { "2026-07-17": "Took the trade." } });
+    expect(next.dayNotes["2026-07-17"]).toBe("");
+  });
+
+  it("only offers export once there is something to export", () => {
+    const { rerender } = render(<JournalPanel {...journalProps()} />);
+    expect(screen.getByRole("button", { name: /markdown/i }).disabled).toBe(true);
+    expect(screen.getByRole("button", { name: /^csv$/i }).disabled).toBe(true);
+
+    rerender(<JournalPanel {...journalProps({ preferences: { ...DEFAULT_PREFERENCES, dayNotes: { "2026-07-17": "Note." } } })} />);
+    expect(screen.getByRole("button", { name: /markdown/i }).disabled).toBe(false);
+    expect(screen.getByRole("button", { name: /^csv$/i }).disabled).toBe(false);
+  });
+});
+
+// The playbook is settings.strategyNotes, name -> text, edited inline in
+// Settings. These assert the per-strategy field wiring; normalization
+// (blank-dropping, length cap) is covered in lib/trade.test.js.
+describe("SettingsPanel — Strategy Playbook", () => {
+  const settingsProps = (overrides = {}) => ({
+    settings: DEFAULT_SETTINGS,
+    setSettings: vi.fn(),
+    trades: [],
+    replaceAllData: vi.fn(),
+    theme: "dark",
+    setTheme: vi.fn(),
+    strategies: ["ICT", "Scalping"],
+    setStrategies: vi.fn(),
+    onImportTrades: vi.fn(),
+    activeAccountId: "",
+    setActiveAccountId: vi.fn(),
+    preferences: DEFAULT_PREFERENCES,
+    setPreferences: vi.fn(),
+    ...overrides,
+  });
+
+  it("shows one note field per strategy, prefilled from settings", () => {
+    render(<SettingsPanel {...settingsProps({ settings: { ...DEFAULT_SETTINGS, strategyNotes: { ICT: "Liquidity sweep entry." } } })} />);
+    expect(screen.getByLabelText("ICT").value).toBe("Liquidity sweep entry.");
+    expect(screen.getByLabelText("Scalping").value).toBe("");
+  });
+
+  it("edits one strategy's note without touching another's", () => {
+    // setSettings must run its functional updater synchronously inside this
+    // mock, not have the result read back later: React reverts a controlled
+    // textarea's DOM value to its (unchanged) prop right after the change
+    // event, and reading e.target.value after that point reads the reverted
+    // "", not what was typed.
+    let captured;
+    const setSettings = vi.fn((updater) => { captured = updater({ strategyNotes: { ICT: "Old note" } }); });
+    render(<SettingsPanel {...settingsProps({ settings: { ...DEFAULT_SETTINGS, strategyNotes: { ICT: "Old note" } }, setSettings })} />);
+
+    fireEvent.change(screen.getByLabelText("Scalping"), { target: { value: "Quick in and out." } });
+
+    expect(captured.strategyNotes).toEqual({ ICT: "Old note", Scalping: "Quick in and out." });
+  });
+
+  it("prompts to add a strategy first when the list is empty", () => {
+    render(<SettingsPanel {...settingsProps({ strategies: [] })} />);
+    expect(screen.getByText(/no strategies yet — add one with manage/i)).toBeTruthy();
   });
 });

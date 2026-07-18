@@ -12,14 +12,16 @@ Runner is [vitest](https://vitest.dev). No config file — vitest reads `vite.co
 Two suites, two environments:
 
 - `src/lib/trade.test.js` — the rules. Everything under test is pure, so it runs in plain Node: no DOM, no jsdom.
-- `src/App.test.jsx` — component smoke tests (`@testing-library/react` + `user-event`) for the trade form's validation gate and the trades table. jsdom is opted into **per file** via the `// @vitest-environment jsdom` pragma at its top, so the lib suite stays in Node. Deliberately shallow: they assert the components wire the rules to the user (errors surface, saves fire, destructive paths confirm first), not the maths — that lives in the lib suite.
+- `src/App.test.jsx` — component smoke tests (`@testing-library/react` + `user-event`) for the trade form's validation gate, the trades table, the daily journal panel and the strategy playbook fields. jsdom is opted into **per file** via the `// @vitest-environment jsdom` pragma at its top, so the lib suite stays in Node. Deliberately shallow: they assert the components wire the rules to the user (errors surface, saves fire, destructive paths confirm first), not the maths — that lives in the lib suite. `TradeForm`, `TradesTable`, `JournalPanel` and `SettingsPanel` are exported from App.jsx for these tests only.
 
 One trap found writing the component tests: the `DateTimePicker` renders inside a `Field` `<label>`, and buttons are labelable elements — so every button in its popover inherits "Entry Date & Time" as its accessible name. Those tests query the picker by text, not by role+name.
+
+Another: React reverts a controlled input's DOM value back to its (unchanged) `value` prop immediately after a change event, if the test's mocked `onChange`/`setState` doesn't actually update that prop. `fireEvent.change` still delivers the typed value to the handler *at dispatch time* — but a test that stores the handler's raw argument and reads `e.target.value` from it later is reading the post-revert DOM, not what was typed. Read the value inside the mock's own implementation (synchronously, during the event), not after. This is why the strategy-playbook edit test's `setSettings` mock captures its result inline rather than via `mock.calls.at(-1)`.
 
 ## Expected result
 
 ```
-Tests  191 passed (191)
+Tests  200 passed (200)
 ```
 
 **A fully green run is the expected state.** No `BUG:`-tagged tests are outstanding — the last one (the CSV fee round trip) went green when the defect was fixed and lost its tag. Any failure is a real regression.

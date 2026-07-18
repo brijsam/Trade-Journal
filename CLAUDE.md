@@ -23,13 +23,13 @@ npx vitest run -t "aggregateLegs"   # single test or describe block, by name
 
 Verification for any change is `npm run lint` + `npm test`, plus driving the app when the change is visual (`.claude/launch.json` defines the dev server as "Trading Journal Dev" on port 5173).
 
-**`npm test` is expected to be fully green (191 passed).** No `BUG:`-tagged known-failing tests are outstanding — the CSV fee round-trip defect that used to hold the count at 1 failure is fixed. If a future defect lands a new `BUG:` test, [TESTING.md](TESTING.md) and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) carry the expected count; a `BUG:` test must never be made green by rewriting its expectation. Any failure today is a real regression.
+**`npm test` is expected to be fully green (200 passed).** No `BUG:`-tagged known-failing tests are outstanding — the CSV fee round-trip defect that used to hold the count at 1 failure is fixed. If a future defect lands a new `BUG:` test, [TESTING.md](TESTING.md) and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) carry the expected count; a `BUG:` test must never be made green by rewriting its expectation. Any failure today is a real regression.
 
 ## Layout
 
 - `src/lib/trade.js` — **the journal's rules.** Trade maths, aggregate stats, date bucketing, storage sharding, account/settings normalization, CSV import/export, form shapes. Pure: no React, no DOM, no storage. This is where behaviour changes belong.
 - `src/lib/trade.test.js` — the feature suite covering the above (plain Node, no DOM).
-- `src/App.test.jsx` — component smoke tests for the trade form's validation gate and the trades table (jsdom via per-file pragma; the lib suite stays DOM-free). `TradeForm` and `TradesTable` are exported from App.jsx for these tests only.
+- `src/App.test.jsx` — component smoke tests for the trade form's validation gate and the trades table (jsdom via per-file pragma; the lib suite stays DOM-free). `TradeForm`, `TradesTable`, `JournalPanel` and `SettingsPanel` are exported from App.jsx for these tests only.
 - `src/lib/format.js` — pure display formatting shared by both bundles.
 - `src/lib/storage.js` — the storage backend switch.
 - `src/App.jsx` (~3.6k lines) — the React shell: design tokens, CSS, every panel and modal, and the root `App` component. Sections are marked with `/* ==== NAME ==== */` banners; grep those to navigate. List-scale code paths (e.g. the trades table sort) derive per-row keys once and keep comparators free of per-comparison parsing — hold that line when touching them.

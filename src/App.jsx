@@ -2405,7 +2405,9 @@ function DayNoteModal({ date, value, onSave, onClose }) {
    day key — shown as one chronological page. Writing here appears on that
    day's calendar cell and vice versa; there is exactly one copy of each note.
 ============================================================================ */
-function JournalPanel({ trades, preferences, setPreferences, onSelectDay, onToast }) {
+// Exported for the component smoke tests (App.test.jsx) — App itself is still
+// the only intended consumer.
+export function JournalPanel({ trades, preferences, setPreferences, onSelectDay, onToast }) {
   const tz = useJournalTz();
   const dayNotes = preferences.dayNotes || {};
   const [editDate, setEditDate] = useState(null);
@@ -3045,7 +3047,9 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
 /* ============================================================================
    SETTINGS PANEL
 ============================================================================ */
-function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, setTheme, strategies, setStrategies, onImportTrades, activeAccountId, setActiveAccountId, preferences, setPreferences }) {
+// Exported for the component smoke tests (App.test.jsx) — App itself is still
+// the only intended consumer.
+export function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, setTheme, strategies, setStrategies, onImportTrades, activeAccountId, setActiveAccountId, preferences, setPreferences }) {
   // ~400 zones × an Intl formatter each is a one-time cost taken when Settings
   // mounts, not on every keystroke in the panel. Offsets are "now"-relative
   // (DST), which is as precise as a picker label needs to be.
