@@ -68,7 +68,7 @@ Windows real-time protection grabs a handle on freshly extracted Electron files 
 %APPDATA%\tradingjournal\window-state.json
 ```
 
-Keys: `brij-tj-meta-v1` (settings, strategies, preferences, theme), `brij-tj-shard-0..23` (trades), `brij-tj-shots-<trade-id>` (screenshots). Back this folder up like any other important local folder, or use Settings → Download Backup for a portable copy.
+Keys: `brij-tj-meta-v1` (settings, strategies, preferences, theme), `brij-tj-shard-0..23` (trades), `brij-tj-shots-<trade-id>` (screenshots), `brij-tj-auth-v1` (login-gate user records — kept separate from the meta blob so password hashes never land in a journal backup export). Back this folder up like any other important local folder, or use Settings → Download Backup for a portable copy.
 
 A release must never change the shard hash, `SHARD_COUNT`, or the key prefixes without a migration — every existing trade would be looked for in the wrong place. See [ARCHITECTURE.md](ARCHITECTURE.md#sharding).
 

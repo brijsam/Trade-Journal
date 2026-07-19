@@ -42,15 +42,21 @@ In the browser build the same data sits in IndexedDB under `brij-trade-journal`.
 - **Fill legs** — scale in and out; P&L is realised only on matched quantity, and the rest stays open.
 - **Fees** — commission and swap tracked apart, totalled automatically.
 - **Journalling** — notes, tags, A+→D grading, a per-trade rule checklist, MAE/MFE, and screenshots staged by Before Entry / During Trade / Exit.
-- **Analytics** — equity curve, drawdown, daily/monthly P&L, win/loss split, R distribution, hour-of-day and day-of-week performance, duration histogram, MAE/MFE scatter, per-symbol and per-strategy tables.
+- **Journal (daily / weekly / yearly)** — free-text notes at three grains, each with its own filter and Markdown / CSV / Word / PDF export; the daily grain is shared with the calendar's day notes.
+- **Playbook** — write each strategy down (setup, trigger, invalidation, sizing) on its own tab; a note survives the strategy being renamed away and back.
+- **Cashflow** — record deposits and withdrawals per account with a running balance and its own filter; the account balance = starting balance + trade P&L + net cashflow.
+- **Inline list edit** — hover a trades-table row and edit Symbol, Market, Direction, Grade or Status right in the cell (ServiceNow-style), without opening the form.
+- **Analytics** — equity curve, drawdown, daily/monthly P&L, win/loss split, R distribution, hour-of-day and day-of-week performance, duration histogram, MAE/MFE scatter, per-symbol and per-strategy tables; the period and trade-based charts window to the most recent N (set per chart, 5 by default).
 - **Calendar** — daily/weekly/monthly P&L heatmap with per-day notes.
 - **Goals** — balance, weekly/monthly/yearly profit, win rate, profit factor, average R, max daily loss.
 - **Import** — CSV from MT4/MT5, Binance and TradingView, mapped by column aliases.
 - **Export** — CSV, Excel, Word, JSON backup, and PDF reports (a real PDF on desktop; the print dialog on web).
+- **Login gate (optional)** — set a username and password in Settings → Security to keep a casual second person out of the running app. Multi-user aware; passwords are hashed, never stored in the clear. It guards the app, not the files on disk — not disk encryption.
+- **Help** — an in-app About / per-tab guides / keyboard-shortcuts / privacy tab, showing the current version.
 - **12 themes**, light and dark — plus a custom accent colour and a Comfortable/Compact density toggle.
 - **Your table, your columns** — hide any trades-table column you don't use; the choice persists.
 - **Personalisation** — name the journal (and its tagline) yourself in Settings → About; the sidebar, window title and report headers follow.
-- **Keyboard-first** — Ctrl+N new trade, Ctrl+1–6 tab jumps, Alt+←/→ history, Ctrl +/−/0 UI zoom, J/K + Enter/E/X to drive the trades table; press `?` for the full list.
+- **Keyboard-first** — Ctrl+N new trade, Ctrl+1–9 tab jumps, Alt+←/→ history, Ctrl +/−/0 UI zoom, J/K + Enter/E/X to drive the trades table; press `?` for the full list.
 - **Command palette** — Ctrl+K: fire any action, jump to any tab, switch theme, or pull up any trade by symbol, id, strategy or tag.
 
 ## Testing
