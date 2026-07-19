@@ -13,7 +13,8 @@ import {
   DollarSign, Percent, Target, Activity, Award,
   AlertTriangle, Save, RotateCcw, Flame, Snowflake, ChevronLeft, ChevronRight,
   FileSpreadsheet, FileText, Database, ShieldCheck, Calculator, Plus, Check, Loader2,
-  Copy, ListPlus, ArrowLeft, ArrowRight, PanelLeftClose, PanelLeftOpen, Layers, Wallet, Keyboard, Table2, BookOpen
+  Copy, ListPlus, ArrowLeft, ArrowRight, PanelLeftClose, PanelLeftOpen, Layers, Wallet, Keyboard, Table2, BookOpen,
+  ArrowDownCircle, ArrowUpCircle, LogIn, LogOut, UserPlus, Lock, Users, Eye, EyeOff, LifeBuoy, ArrowRightLeft
 } from "lucide-react";
 import { storage } from "./lib/storage";
 import {
@@ -26,16 +27,18 @@ import {
 import {
   MARKET_TYPES, DIRECTIONS, GRADES, STATUS, DEFAULT_STRATEGIES, DEFAULT_GOALS,
   DEFAULT_CHECKLIST_RULES, DEFAULT_SETTINGS, DEFAULT_FILTERS, DEFAULT_PREFERENCES,
-  SHARD_COUNT, META_KEY, SHARD_PREFIX, SHOTS_PREFIX, shardKey, shardOf,
+  SHARD_COUNT, META_KEY, SHARD_PREFIX, SHOTS_PREFIX, AUTH_KEY, shardKey, shardOf,
   uid, nextTradeId, tradeSeq, pad, fmtDate, fmtDateTime, isoDate, isoWeekKey, monthKey, monthLabel,
-  weekOfMonthLabel, weekOfMonthKey, toLocalInputValue, parseLocalInputValue, zonedNow, tzOffsetLabel,
-  journalEntries, journalToMarkdown, journalToCSV, journalToHtml, filterJournalEntries, CHART_PERIOD_CHOICES,
+  weekOfMonthLabel, weekOfMonthKey, toLocalInputValue, parseLocalInputValue, zonedNow, tzOffsetLabel, tzOffsetMinutes,
+  journalEntries, journalToMarkdown, journalToCSV, journalToHtml, filterJournalEntries, JOURNAL_KEY_PATTERNS, CHART_PERIOD_CHOICES, mostRecentTrades,
   normalizeAccounts, mergeSettings, mergePreferences, clampZoom, stepZoom, startOfWeek, dateRangeForPreset, dateInRange,
   groupPerformance, goalProgress, computeTrade, aggregateLegs, stripComputed,
   escapeHtml, tradesToCSV, parseCSV, rowsToTrades, partitionDuplicateImports, paletteFilter, normalizeAccent,
   summarize, equityCurve, maxDrawdown, consecutiveStreaks, sharpeSortino,
   emptyTrade, emptyLeg, withDerivedFills, tradeToForm, formSignature, tradeWarnings, PAGE_SIZES, DEFAULT_TABLE_SORT,
+  normalizeTransactions, transactionsNet, filterTransactions, sortedTransactions,
 } from "./lib/trade";
+import { normalizeUsers, findUser, makeUser, verifyPassword } from "./lib/auth";
 
 /* ============================================================================
    JOURNAL TIMEZONE
@@ -282,6 +285,13 @@ const APP_CSS = `
 
 .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-800); color: var(--text-secondary); cursor: pointer; }
 .icon-btn:hover { color: var(--text-primary); background: var(--bg-700); }
+/* Minimal chrome variant for pure-navigation controls (back/forward, sidebar
+   collapse): no border or fill until hovered, so they read as wayfinding
+   rather than actions. */
+.icon-btn-min { border: none; background: transparent; width: 24px; height: 24px; opacity: 0.55; }
+.icon-btn-min:hover { opacity: 1; background: var(--bg-800); }
+.icon-btn-min:disabled { opacity: 0.22; }
+.icon-btn-min:disabled:hover { background: transparent; }
 .icon-btn-danger:hover { color: var(--loss); border-color: var(--loss-border); }
 
 .cards-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
@@ -345,6 +355,18 @@ const APP_CSS = `
 .cell-mark-accent { color: var(--accent); }
 .muted { color: var(--text-muted); }
 .row-actions { display: flex; gap: 6px; align-items: center; }
+/* Inline-editable table cell (double-click Symbol / Grade). A faint dashed
+   underline hints the affordance without shouting; the in-place editor is
+   sized to sit inside the row without growing it. */
+.inline-cell { cursor: pointer; }
+.inline-cell:hover { box-shadow: inset 0 -1px 0 var(--accent); }
+.inline-cell-val { display: inline-flex; align-items: center; gap: 4px; }
+/* ServiceNow-style affordance: a pencil that only shows on row/cell hover, so
+   editable cells read as plain until you reach for them. */
+.inline-edit-hint { display: inline-flex; align-items: center; justify-content: center; padding: 1px; border: none; background: none; color: var(--text-muted); cursor: pointer; opacity: 0; transition: opacity 0.1s, color 0.1s; }
+.trades-table tbody tr:hover .inline-edit-hint { opacity: 0.55; }
+.inline-edit-hint:hover { opacity: 1; color: var(--accent); }
+.inline-input { height: 26px; padding: 2px 6px; font-size: 12px; min-width: 70px; max-width: 130px; }
 /* Sortable columns look inert until hovered, so the chevron is always
    present on them — just faint until the column is the active sort. */
 .th-sortable { cursor: pointer; }
@@ -525,6 +547,8 @@ const APP_CSS = `
 .journal-filter-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 14px; padding: 10px 12px; background: var(--bg-900); border: 1px solid var(--border-soft); border-radius: 10px; }
 .journal-filter-row .field { min-width: 150px; flex: 0 1 auto; }
 .journal-filter-clear { white-space: nowrap; }
+.journal-filter-on { color: var(--accent); }
+.journal-grain-switch { align-self: flex-start; max-width: 320px; }
 .chart-period-select { width: auto; padding: 3px 8px; font-size: 11.5px; }
 .journal-list { display: flex; flex-direction: column; gap: 10px; }
 .journal-entry { background: var(--bg-900); border: 1px solid var(--border-soft); border-radius: 10px; padding: 10px 12px; }
@@ -535,6 +559,31 @@ const APP_CSS = `
 .day-focus-pnl { font-size: 30px; font-weight: 700; }
 .day-focus-sub { font-size: 12px; color: var(--text-muted); }
 .day-focus-note { margin: 12px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--text-secondary); white-space: pre-wrap; }
+
+/* Cashflow — deposit/withdrawal pills use the neutral accent + a direction
+   icon, never profit/loss green/red (reserved for P&L). */
+.txn-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid var(--border); background: var(--bg-900); white-space: nowrap; }
+.txn-deposit { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.txn-withdrawal { color: var(--text-secondary); }
+
+/* Help / Guides */
+.help-guides { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.help-guide { background: var(--bg-900); border: 1px solid var(--border-soft); border-radius: 10px; padding: 11px 13px; }
+.help-guide-head { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; color: var(--accent); }
+.help-shortcut { display: flex; align-items: center; gap: 10px; }
+.help-shortcut kbd { background: var(--bg-900); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; font-size: 11.5px; white-space: nowrap; }
+
+/* Login gate — full-screen, centred, self-contained (renders before the app
+   chrome exists). */
+.auth-gate { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--bg-950, var(--bg-900)); z-index: 100; }
+.auth-card { width: 100%; max-width: 380px; background: var(--bg-800); border: 1px solid var(--border); border-radius: 16px; padding: 28px 26px; box-shadow: var(--card-shadow); }
+.auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.auth-brand-text { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 18px; }
+.auth-sub { color: var(--text-muted); font-size: 12.5px; margin-bottom: 20px; }
+.auth-error { color: var(--loss); font-size: 12px; margin-top: 4px; }
+.auth-pw-wrap { position: relative; display: flex; align-items: center; }
+.auth-pw-wrap .input { padding-right: 38px; }
+.auth-pw-toggle { position: absolute; right: 6px; background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; display: flex; }
 
 .mini-compare { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 @media (max-width: 720px) { .mini-compare { grid-template-columns: 1fr; } }
@@ -1952,6 +2001,68 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
   const colMenuRef = useRef(null);
   const hidden = hiddenColumns || [];
   const show = (key) => !hidden.includes(key);
+  // ServiceNow-style inline list edit: hover a row and a pencil appears in every
+  // editable cell; click it (or double-click the cell) to edit in place, without
+  // opening the form. The editable set is the metadata columns — Symbol, Market,
+  // Direction, Grade, Status — never the computed P&L/RR figures, which stay
+  // behind the form. Each edit routes through onBulkEdit (single-row batch), so
+  // the trade is replaced not mutated and computeTrade's cache re-derives.
+  // Disabled when no onBulkEdit is wired (the component tests render without it).
+  const [inlineEdit, setInlineEdit] = useState(null); // { id, field } | null
+  const canInline = !!onBulkEdit;
+  const INLINE_FIELDS = {
+    symbol: { label: "symbol", type: "text" },
+    marketType: { label: "market", type: "select", options: MARKET_TYPES },
+    direction: { label: "direction", type: "select", options: DIRECTIONS },
+    grade: { label: "grade", type: "select", options: GRADES },
+    status: { label: "status", type: "select", options: STATUS },
+  };
+  const startInline = (id, field) => { if (canInline) setInlineEdit({ id, field }); };
+  const isEditing = (id, field) => inlineEdit?.id === id && inlineEdit?.field === field;
+  const commitInline = (t, field, raw) => {
+    setInlineEdit(null);
+    const v = field === "symbol" ? String(raw).trim().toUpperCase() : String(raw);
+    if (field === "symbol" && !v) return;          // a trade must keep a symbol
+    if (v === String(t[field] ?? "")) return;      // no change
+    onBulkEdit([t.id], { [field]: v }, `${INLINE_FIELDS[field].label} set to ${v}`);
+  };
+  // Rendered as a plain function, NOT a nested <Component>: a component defined
+  // in render gets a fresh identity each pass and would remount the editing
+  // input mid-keystroke, blurring it. Returning elements keeps reconciliation.
+  const inlineCell = (t, field, display, tdClass = "") => {
+    const cfg = INLINE_FIELDS[field];
+    if (!canInline) return <td className={tdClass}>{display}</td>;
+    const editing = isEditing(t.id, field);
+    return (
+      <td className={`inline-cell ${tdClass}`}
+        onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => { e.stopPropagation(); startInline(t.id, field); }}
+        title={editing ? undefined : `Double-click to edit ${cfg.label}`}>
+        {editing ? (
+          cfg.type === "text" ? (
+            <input autoFocus className="input inline-input" defaultValue={t[field] ?? ""} aria-label={`${cfg.label} for ${t.id}`}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitInline(t, field, e.target.value); } else if (e.key === "Escape") setInlineEdit(null); }}
+              onBlur={(e) => commitInline(t, field, e.target.value)} />
+          ) : (
+            <select autoFocus className="input inline-input" defaultValue={t[field] ?? ""} aria-label={`${cfg.label} for ${t.id}`}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => commitInline(t, field, e.target.value)}
+              onBlur={() => setInlineEdit(null)}
+              onKeyDown={(e) => { if (e.key === "Escape") setInlineEdit(null); }}>
+              {cfg.options.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          )
+        ) : (
+          <span className="inline-cell-val">
+            {display}
+            <button type="button" className="inline-edit-hint" tabIndex={-1} title={`Edit ${cfg.label}`} aria-label={`Edit ${cfg.label} for ${t.id}`}
+              onClick={(e) => { e.stopPropagation(); startInline(t.id, field); }}><Pencil size={11} /></button>
+          </span>
+        )}
+      </td>
+    );
+  };
   // Memoized: the keyboard-nav effect below depends on it, and the raw arrow
   // would re-subscribe that listener every render.
   const toggleSelected = useCallback((id) => setSelectedIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id])), []);
@@ -2171,23 +2282,25 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
               <td onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label={`Select ${t.id}`} checked={selectedIds.includes(t.id)} onChange={() => toggleSelected(t.id)} /></td>
               {show("id") && <td className="mono muted">{t.id}</td>}
               {showAccount && show("account") && <td className="muted">{t._accountName}</td>}
-              <td className="cell-strong">
-                {t.symbol}
-                {/* Two marks worth carrying into the table: a trade built from
-                    several fills, and one only part-way out of the market. */}
-                {t._scaled && <span className="cell-mark" title={`${t._entryFills + t._exitFills} fills`}><Layers size={11} /></span>}
-                {t._partial && <span className="cell-mark cell-mark-accent" title={`Partial close — ${fmtNum(t._openQty, 4)} still open`}>PART</span>}
-              </td>
-              {show("marketType") && <td><Badge tone="neutral">{t.marketType}</Badge></td>}
-              {show("direction") && <td><Badge tone={t.direction === "Long" ? "profit" : "loss"}>{t.direction}</Badge></td>}
+              {inlineCell(t, "symbol", (
+                <>
+                  {t.symbol}
+                  {/* Two marks worth carrying into the table: a trade built from
+                      several fills, and one only part-way out of the market. */}
+                  {t._scaled && <span className="cell-mark" title={`${t._entryFills + t._exitFills} fills`}><Layers size={11} /></span>}
+                  {t._partial && <span className="cell-mark cell-mark-accent" title={`Partial close — ${fmtNum(t._openQty, 4)} still open`}>PART</span>}
+                </>
+              ), "cell-strong")}
+              {show("marketType") && inlineCell(t, "marketType", <Badge tone="neutral">{t.marketType}</Badge>)}
+              {show("direction") && inlineCell(t, "direction", <Badge tone={t.direction === "Long" ? "profit" : "loss"}>{t.direction}</Badge>)}
               {show("entryDateTime") && <td className="mono">{fmtDate(t.entryDateTime)}</td>}
               {show("exitDateTime") && <td className="mono">{t.exitDateTime ? fmtDate(t.exitDateTime) : "—"}</td>}
               <td><PnlText value={t.pnlAmount} /></td>
               {show("pnlPercent") && <td><PnlText value={t.pnlPercent} percent /></td>}
               {show("expectedRR") && <td className="mono">{t.expectedRR !== null ? `${fmtNum(t.expectedRR)}R` : "—"}</td>}
               {show("actualRR") && <td className="mono">{t.actualRR !== null ? `${fmtNum(t.actualRR)}R` : "—"}</td>}
-              {show("grade") && <td><Badge tone="gold">{t.grade}</Badge></td>}
-              {show("status") && <td><Badge tone={t.status === "Open" ? "accent" : "neutral"}>{t.status}</Badge></td>}
+              {show("grade") && inlineCell(t, "grade", <Badge tone="gold">{t.grade}</Badge>)}
+              {show("status") && inlineCell(t, "status", <Badge tone={t.status === "Open" ? "accent" : "neutral"}>{t.status}</Badge>)}
               <td className="row-actions" onClick={(e) => e.stopPropagation()}>
                 <button className="btn btn-ghost row-edit-btn" aria-label={`Edit ${t.id}`} onClick={() => onEdit(t)}><Pencil size={12} /> Edit</button>
                 <button className="icon-btn" title="Copy trade" aria-label={`Copy ${t.id}`} onClick={() => onCopy(t)}><Copy size={13} /></button>
@@ -2439,11 +2552,14 @@ function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences 
     </div>
   );
 }
-function DayNoteModal({ date, value, onSave, onClose }) {
+// Shared by the calendar's day-note button and all three Journal-tab grains.
+// `title`/`placeholder` default to the daily wording so the calendar caller —
+// which only passes `date` — is unchanged.
+function DayNoteModal({ date, title, value, onSave, onClose, placeholder }) {
   const [text, setText] = useState(value);
   return (
-    <Modal title={`Journal — ${date}`} onClose={onClose}>
-      <textarea className="input textarea" rows={6} value={text} onChange={(e) => setText(e.target.value)} placeholder="Market conditions, mindset, plan for the day…" autoFocus />
+    <Modal title={title || `Journal — ${date}`} onClose={onClose}>
+      <textarea className="input textarea" rows={6} value={text} onChange={(e) => setText(e.target.value)} placeholder={placeholder || "Market conditions, mindset, plan for the day…"} autoFocus />
       <div className="modal-footer">
         <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
         <button className="btn btn-primary" onClick={() => { onSave(text); onClose(); }}><Save size={14} /> Save Note</button>
@@ -2453,45 +2569,86 @@ function DayNoteModal({ date, value, onSave, onClose }) {
 }
 
 /* ============================================================================
-   DAILY JOURNAL
-   The same store the calendar edits — preferences.dayNotes, keyed by the local
-   day key — shown as one chronological page. Writing here appears on that
-   day's calendar cell and vice versa; there is exactly one copy of each note.
+   JOURNAL
+   Three grains, one page: Daily (preferences.dayNotes — the same store the
+   calendar edits), Weekly (weekNotes, isoWeekKey) and Yearly (yearNotes, a
+   plain year). Each grain is one JournalSection with its own filter, list and
+   Markdown/CSV/Word/PDF exports; the daily section is the shared calendar
+   store, so writing a day note here still lands on that day's calendar cell.
 ============================================================================ */
-// Exported for the component smoke tests (App.test.jsx) — App itself is still
-// the only intended consumer.
-export function JournalPanel({ trades, preferences, setPreferences, onSelectDay, onToast }) {
-  const tz = useJournalTz();
-  const dayNotes = preferences.dayNotes || {};
-  const [editDate, setEditDate] = useState(null);
-  const [deleteDate, setDeleteDate] = useState(null);
-  const [newDate, setNewDate] = useState(() => isoDate(zonedNow(tz)));
-  const saveDayNote = (key, text) => setPreferences((p) => ({ ...p, dayNotes: { ...p.dayNotes, [key]: text } }));
+// Per-grain config: how to key "now", which store, how to bucket trade stats,
+// how to label an entry, and what add/filter input to render. The three key
+// formats are all zero-padded and sort lexically into chronological order.
+const WEEK_LABEL = (key) => { const m = /^(\d{4})-W(\d{2})$/.exec(key); return m ? `Week ${Number(m[2])} · ${m[1]}` : key; };
+const JOURNAL_GRAINS = {
+  day: {
+    label: "Daily", noun: "day", store: "dayNotes",
+    nowKey: (tz) => isoDate(zonedNow(tz)),
+    statKey: (exitDT) => isoDate(exitDT),
+    entryLabel: (key) => fmtDate(parseLocalInputValue(key)),
+    inputType: "date", canViewTrades: true,
+    placeholder: "Market conditions, mindset, plan for the day…",
+    deleteHint: "The calendar's day journal loses it too.",
+  },
+  week: {
+    label: "Weekly", noun: "week", store: "weekNotes",
+    nowKey: (tz) => isoWeekKey(zonedNow(tz)),
+    statKey: (exitDT) => isoWeekKey(exitDT),
+    entryLabel: WEEK_LABEL,
+    inputType: "week", canViewTrades: false,
+    placeholder: "How the week went — themes, mistakes, what worked…",
+    deleteHint: "",
+  },
+  year: {
+    label: "Yearly", noun: "year", store: "yearNotes",
+    nowKey: (tz) => String(zonedNow(tz).getFullYear()),
+    statKey: (exitDT) => { const d = new Date(exitDT); return Number.isNaN(d.getTime()) ? null : String(d.getFullYear()); },
+    entryLabel: (key) => key,
+    inputType: "number", canViewTrades: false,
+    placeholder: "The year in review — annual goals, big lessons…",
+    deleteHint: "",
+  },
+};
 
-  // Same bucketing as the calendar heatmap: closed trades with a P&L, keyed by
-  // exit day — so an entry's stats line agrees with its calendar cell.
-  const byDay = useMemo(() => {
+// One grain's page. Everything grain-specific comes from `grain`; the body is
+// the same for all three.
+function JournalSection({ grain, trades, preferences, setPreferences, onSelectDay, onToast }) {
+  const tz = useJournalTz();
+  const cfg = JOURNAL_GRAINS[grain];
+  // Stable ref for the entries memo below — a fresh `|| {}` each render would
+  // recompute the list every time.
+  const notes = useMemo(() => preferences[cfg.store] || {}, [preferences, cfg.store]);
+  const [editKey, setEditKey] = useState(null);
+  const [deleteKey, setDeleteKey] = useState(null);
+  const [newKey, setNewKey] = useState(() => cfg.nowKey(tz));
+  const saveNote = (key, text) => setPreferences((p) => ({ ...p, [cfg.store]: { ...(p[cfg.store] || {}), [key]: text } }));
+  const keyValid = JOURNAL_KEY_PATTERNS[grain].test(newKey);
+
+  // Closed trades with a P&L, bucketed by this grain's period of the exit —
+  // so an entry's stats line matches how the rest of the app buckets.
+  const byPeriod = useMemo(() => {
     const m = {};
     trades.forEach((t) => {
       if (t.status !== "Closed" || t.pnlAmount === null || !t.exitDateTime) return;
-      const k = isoDate(t.exitDateTime);
+      const k = cfg.statKey(t.exitDateTime);
       if (!k) return;
       if (!m[k]) m[k] = { pnl: 0, count: 0 };
       m[k].pnl += t.pnlAmount;
       m[k].count += 1;
     });
     return m;
-  }, [trades]);
+  }, [trades, cfg]);
 
-  // Keyed on the stored object itself — journalEntries tolerates null, and the
-  // `|| {}` fallback above would be a fresh object every render.
-  const entries = useMemo(() => journalEntries(preferences.dayNotes), [preferences.dayNotes]);
+  const entries = useMemo(() => journalEntries(notes, grain), [notes, grain]);
 
-  // The filter narrows the list AND every export below — what's on screen is
-  // exactly what a file will hold. Session state on purpose, not a preference:
-  // a filter left set weeks ago would read as vanished entries.
+  // The filter narrows the list AND every export — what's on screen is exactly
+  // what a file holds. Session state, not a preference: a filter left set weeks
+  // ago would read as vanished entries. Collapsed until the Filter button opens
+  // it, and can't collapse while active (that would hide why the list is short).
   const [journalFilter, setJournalFilter] = useState({ from: "", to: "", search: "" });
   const filterActive = !!(journalFilter.from || journalFilter.to || journalFilter.search.trim());
+  const [showFilter, setShowFilter] = useState(false);
+  const filterVisible = showFilter || filterActive;
   const filtered = useMemo(() => filterJournalEntries(entries, journalFilter), [entries, journalFilter]);
   const setFilterField = (key) => (e) => setJournalFilter((f) => ({ ...f, [key]: e.target.value }));
 
@@ -2503,17 +2660,17 @@ export function JournalPanel({ trades, preferences, setPreferences, onSelectDay,
 
   const exportAs = async (kind) => {
     const stamp = isoDate(zonedNow(tz));
-    const scope = filterActive ? "Filtered journal" : "Full journal";
-    const generatedLabel = `${scope} · ${filtered.length} entr${filtered.length === 1 ? "y" : "ies"} · Generated ${fmtDateTime(zonedNow(tz))}`;
+    const scope = filterActive ? "Filtered" : "Full";
+    const title = `${cfg.label} Trading Journal`;
+    const generatedLabel = `${scope} ${cfg.label.toLowerCase()} journal · ${filtered.length} entr${filtered.length === 1 ? "y" : "ies"} · Generated ${fmtDateTime(zonedNow(tz))}`;
+    const base = `TradeJournal_${cfg.label}Journal_${stamp}`;
     try {
-      if (kind === "md") notifyExport(await saveTextExport(`TradeJournal_Journal_${stamp}.md`, journalToMarkdown(filtered, byDay), "text/markdown;charset=utf-8"));
-      else if (kind === "csv") notifyExport(await saveTextExport(`TradeJournal_Journal_${stamp}.csv`, journalToCSV(filtered), "text/csv;charset=utf-8"));
-      else if (kind === "word") notifyExport(await saveTextExport(`TradeJournal_Journal_${stamp}.doc`, "﻿" + journalToHtml(filtered, byDay, { forWord: true, generatedLabel }), "application/msword"));
+      if (kind === "md") notifyExport(await saveTextExport(`${base}.md`, journalToMarkdown(filtered, byPeriod), "text/markdown;charset=utf-8"));
+      else if (kind === "csv") notifyExport(await saveTextExport(`${base}.csv`, journalToCSV(filtered), "text/csv;charset=utf-8"));
+      else if (kind === "word") notifyExport(await saveTextExport(`${base}.doc`, "﻿" + journalToHtml(filtered, byPeriod, { title, forWord: true, generatedLabel }), "application/msword"));
       else if (kind === "pdf") {
-        const html = journalToHtml(filtered, byDay, { generatedLabel });
-        if (desktop?.isElectron) notifyExport(await desktop.savePDF(`TradeJournal_Journal_${stamp}.pdf`, html));
-        // Web build has no PDF engine — the browser's print dialog is the
-        // "Save as PDF" path, same as the trade report.
+        const html = journalToHtml(filtered, byPeriod, { title, generatedLabel });
+        if (desktop?.isElectron) notifyExport(await desktop.savePDF(`${base}.pdf`, html));
         else printHtmlViaBrowser(html);
       }
     } catch (e) {
@@ -2523,75 +2680,92 @@ export function JournalPanel({ trades, preferences, setPreferences, onSelectDay,
   };
 
   return (
-    <div className="stack">
-      <Panel
-        title="Daily Journal"
-        right={
-          <div className="journal-toolbar">
-            <button className="btn btn-ghost" disabled={!filtered.length} title="Export as Markdown" onClick={() => exportAs("md")}><FileText size={13} /> Markdown</button>
-            <button className="btn btn-ghost" disabled={!filtered.length} title="Export as CSV" onClick={() => exportAs("csv")}><FileSpreadsheet size={13} /> CSV</button>
-            <button className="btn btn-ghost" disabled={!filtered.length} title="Export as Word document" onClick={() => exportAs("word")}><FileText size={13} /> Word</button>
-            <button className="btn btn-ghost" disabled={!filtered.length} title="Export as PDF" onClick={() => exportAs("pdf")}><FileDown size={13} /> PDF</button>
-          </div>
-        }
-      >
-        <div className="journal-add-row">
-          <input type="date" className="input" value={newDate} onChange={(e) => setNewDate(e.target.value)} aria-label="Entry date" />
-          <button className="btn btn-primary" disabled={!newDate} onClick={() => setEditDate(newDate)}>
-            <Pencil size={13} /> {dayNotes[newDate]?.trim() ? "Edit entry" : "Write entry"}
+    <Panel
+      title={`${cfg.label} Journal`}
+      right={
+        <div className="journal-toolbar">
+          <button className={`btn btn-ghost ${filterVisible ? "journal-filter-on" : ""}`} title="Filter entries and exports" aria-expanded={filterVisible} onClick={() => setShowFilter((s) => !s)}>
+            <Filter size={13} /> Filter{filterActive ? ` (${filtered.length}/${entries.length})` : ""}
           </button>
+          <button className="btn btn-ghost" disabled={!filtered.length} title="Export as Markdown" onClick={() => exportAs("md")}><FileText size={13} /> Markdown</button>
+          <button className="btn btn-ghost" disabled={!filtered.length} title="Export as CSV" onClick={() => exportAs("csv")}><FileSpreadsheet size={13} /> CSV</button>
+          <button className="btn btn-ghost" disabled={!filtered.length} title="Export as Word document" onClick={() => exportAs("word")}><FileText size={13} /> Word</button>
+          <button className="btn btn-ghost" disabled={!filtered.length} title="Export as PDF" onClick={() => exportAs("pdf")}><FileDown size={13} /> PDF</button>
         </div>
-        {entries.length > 0 && (
-          <div className="journal-filter-row">
-            <Field label="From"><input type="date" className="input" value={journalFilter.from} onChange={setFilterField("from")} /></Field>
-            <Field label="To"><input type="date" className="input" value={journalFilter.to} onChange={setFilterField("to")} /></Field>
-            <Field label="Search notes"><input className="input" placeholder="Text in a note…" value={journalFilter.search} onChange={setFilterField("search")} /></Field>
-            {filterActive && (
-              <button className="btn btn-ghost journal-filter-clear" onClick={() => setJournalFilter({ from: "", to: "", search: "" })}>
-                <X size={12} /> Clear ({filtered.length} of {entries.length})
-              </button>
-            )}
-          </div>
-        )}
-        {entries.length === 0 ? (
-          <EmptyState icon={BookOpen} title="No journal entries yet" message="Write a note for any trading day — entries appear here and on that day's calendar cell." />
-        ) : filtered.length === 0 ? (
-          <EmptyState icon={BookOpen} title="No entries match this filter" message="Widen the date range or clear the search — the entries are still here." />
-        ) : (
-          <div className="journal-list">
-            {filtered.map(([date, text]) => {
-              const info = byDay[date];
-              return (
-                <div className="journal-entry" key={date}>
-                  <div className="journal-entry-head">
-                    {/* Through parseLocalInputValue, not new Date(date): a bare
-                        day key through the Date constructor is UTC midnight,
-                        the previous evening west of the meridian. */}
-                    <span className="mono cell-strong">{fmtDate(parseLocalInputValue(date))}</span>
-                    {info
-                      ? <span className="hint mono">{info.count} trade{info.count === 1 ? "" : "s"} · <PnlText value={info.pnl} /></span>
-                      : <span className="hint">No closed trades</span>}
-                    <div className="journal-entry-actions">
-                      {info && <button className="btn btn-ghost row-edit-btn" onClick={() => onSelectDay(date)}>View trades</button>}
-                      <button className="icon-btn" title="Edit entry" aria-label={`Edit entry for ${date}`} onClick={() => setEditDate(date)}><Pencil size={13} /></button>
-                      <button className="icon-btn icon-btn-danger" title="Delete entry" aria-label={`Delete entry for ${date}`} onClick={() => setDeleteDate(date)}><Trash2 size={13} /></button>
-                    </div>
+      }
+    >
+      <div className="journal-add-row">
+        <input type={cfg.inputType} className="input" value={newKey} min={grain === "year" ? 1970 : undefined} max={grain === "year" ? 9999 : undefined} onChange={(e) => setNewKey(e.target.value)} aria-label={`Entry ${cfg.noun}`} />
+        <button className="btn btn-primary" disabled={!keyValid} onClick={() => setEditKey(newKey)}>
+          <Pencil size={13} /> {notes[newKey]?.trim() ? "Edit entry" : "Write entry"}
+        </button>
+      </div>
+      {entries.length > 0 && filterVisible && (
+        <div className="journal-filter-row">
+          <Field label="From"><input type={cfg.inputType} className="input" value={journalFilter.from} onChange={setFilterField("from")} /></Field>
+          <Field label="To"><input type={cfg.inputType} className="input" value={journalFilter.to} onChange={setFilterField("to")} /></Field>
+          <Field label="Search notes"><input className="input" placeholder="Text in a note…" value={journalFilter.search} onChange={setFilterField("search")} /></Field>
+          {filterActive && (
+            <button className="btn btn-ghost journal-filter-clear" onClick={() => setJournalFilter({ from: "", to: "", search: "" })}>
+              <X size={12} /> Clear ({filtered.length} of {entries.length})
+            </button>
+          )}
+        </div>
+      )}
+      {entries.length === 0 ? (
+        <EmptyState icon={BookOpen} title={`No ${cfg.label.toLowerCase()} entries yet`} message={`Write a note for any ${cfg.noun} — pick one above and start writing.`} />
+      ) : filtered.length === 0 ? (
+        <EmptyState icon={BookOpen} title="No entries match this filter" message="Widen the range or clear the search — the entries are still here." />
+      ) : (
+        <div className="journal-list">
+          {filtered.map(([key, text]) => {
+            const info = byPeriod[key];
+            return (
+              <div className="journal-entry" key={key}>
+                <div className="journal-entry-head">
+                  <span className="mono cell-strong">{cfg.entryLabel(key)}</span>
+                  {info
+                    ? <span className="hint mono">{info.count} trade{info.count === 1 ? "" : "s"} · <PnlText value={info.pnl} /></span>
+                    : <span className="hint">No closed trades</span>}
+                  <div className="journal-entry-actions">
+                    {cfg.canViewTrades && info && <button className="btn btn-ghost row-edit-btn" onClick={() => onSelectDay(key)}>View trades</button>}
+                    <button className="icon-btn" title="Edit entry" aria-label={`Edit entry for ${key}`} onClick={() => setEditKey(key)}><Pencil size={13} /></button>
+                    <button className="icon-btn icon-btn-danger" title="Delete entry" aria-label={`Delete entry for ${key}`} onClick={() => setDeleteKey(key)}><Trash2 size={13} /></button>
                   </div>
-                  <div className="journal-entry-text">{text.trim()}</div>
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </Panel>
-      {editDate && <DayNoteModal date={editDate} value={dayNotes[editDate] || ""} onSave={(text) => saveDayNote(editDate, text)} onClose={() => setEditDate(null)} />}
-      {deleteDate && (
+                <div className="journal-entry-text">{text.trim()}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {editKey && <DayNoteModal title={`${cfg.label} Journal — ${cfg.entryLabel(editKey)}`} placeholder={cfg.placeholder} value={notes[editKey] || ""} onSave={(text) => saveNote(editKey, text)} onClose={() => setEditKey(null)} />}
+      {deleteKey && (
         <ConfirmModal
           title="Delete Journal Entry" danger confirmLabel="Delete"
-          message={`Delete the note for ${deleteDate}? The calendar's day journal loses it too.`}
-          onConfirm={() => saveDayNote(deleteDate, "")} onClose={() => setDeleteDate(null)}
+          message={`Delete the note for ${cfg.entryLabel(deleteKey)}?${cfg.deleteHint ? ` ${cfg.deleteHint}` : ""}`}
+          onConfirm={() => saveNote(deleteKey, "")} onClose={() => setDeleteKey(null)}
         />
       )}
+    </Panel>
+  );
+}
+
+// Exported for the component smoke tests (App.test.jsx) — App itself is still
+// the only intended consumer. Defaults to the daily grain.
+export function JournalPanel(props) {
+  const [grain, setGrain] = useState("day");
+  return (
+    <div className="stack">
+      <div className="segmented journal-grain-switch">
+        {Object.entries(JOURNAL_GRAINS).map(([key, cfg]) => (
+          <button key={key} type="button" className={`seg-btn ${grain === key ? "seg-active-plain" : ""}`} onClick={() => setGrain(key)}>{cfg.label}</button>
+        ))}
+      </div>
+      {/* Keyed by grain so switching grains remounts the section: its newKey,
+          filter and open modals all reset to the new grain rather than carrying
+          a day-shaped key into the weekly input (which would disable Add). */}
+      <JournalSection key={grain} grain={grain} {...props} />
     </div>
   );
 }
@@ -2643,6 +2817,253 @@ export function PlaybookPanel({ settings, setSettings, strategies, setStrategies
         )}
       </Panel>
       {showStrategyMgr && <StrategyManager strategies={strategies} setStrategies={setStrategies} onClose={() => setShowStrategyMgr(false)} />}
+    </div>
+  );
+}
+
+/* ============================================================================
+   CASHFLOW — deposits & withdrawals
+   settings.transactions[]: money moving in and out of an account, independent
+   of trade P&L. The account's balance = its starting balance + trade P&L + net
+   cashflow. This tab has its OWN filter (date range / type / note) that narrows
+   the list and its running-balance column and touches nothing elsewhere — the
+   request was explicit about that. Per-account like trades: a new transaction
+   lands on the account in view; an orphaned one resolves to the first account.
+   Colour note: deposits/withdrawals are cash movement, not P&L, so they use the
+   neutral accent and directional icons — never the profit/loss green/red, which
+   this app reserves for P&L (see CLAUDE.md § Styling).
+============================================================================ */
+// Add/edit one transaction. Amount is captured positive; the deposit/withdrawal
+// toggle carries the sign, so the stored record can't disagree with itself.
+function TransactionModal({ initial, accountName, onSave, onClose }) {
+  const tz = useJournalTz();
+  const [type, setType] = useState(initial?.type || "deposit");
+  const [amount, setAmount] = useState(initial?.amount != null ? String(initial.amount) : "");
+  const [date, setDate] = useState((initial?.date || "").slice(0, 10) || isoDate(zonedNow(tz)));
+  const [note, setNote] = useState(initial?.note || "");
+  const amt = Math.abs(num(amount, 0));
+  const valid = amt > 0 && !!date;
+  return (
+    <Modal title={initial?.id ? "Edit Transaction" : "New Transaction"} onClose={onClose}>
+      <div className="stack" style={{ gap: 12 }}>
+        <div className="segmented">
+          <button type="button" className={`seg-btn ${type === "deposit" ? "seg-active-plain" : ""}`} onClick={() => setType("deposit")}><ArrowDownCircle size={14} /> Deposit</button>
+          <button type="button" className={`seg-btn ${type === "withdrawal" ? "seg-active-plain" : ""}`} onClick={() => setType("withdrawal")}><ArrowUpCircle size={14} /> Withdrawal</button>
+        </div>
+        <div className="form-grid">
+          <Field label="Amount ($)"><input className="input mono" type="number" step="any" min="0" autoFocus value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
+          <Field label="Date"><input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+        </div>
+        <Field label="Note (optional)"><input className="input" maxLength={500} placeholder="Reason, source, destination…" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+        {accountName && <div className="hint">Recorded against <b>{accountName}</b>.</div>}
+      </div>
+      <div className="modal-footer">
+        <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" disabled={!valid} onClick={() => { onSave({ type, amount: amt, date, note: note.trim() }); onClose(); }}><Save size={14} /> Save</button>
+      </div>
+    </Modal>
+  );
+}
+// Exported for the component smoke tests (App.test.jsx). App is the only
+// intended consumer. `startingBalance`/`tradesNet` are the account-scoped
+// figures the balance folds together.
+export function CashflowPanel({ settings, setSettings, accounts = [], activeAccountId = "", startingBalance = 0, tradesNet = 0, onToast }) {
+  const [editTxn, setEditTxn] = useState(null); // {} = new (truthy but no id), record = edit
+  const [deleteTxn, setDeleteTxn] = useState(null);
+  const [filter, setFilter] = useState({ from: "", to: "", type: "", search: "" });
+  const filterActive = !!(filter.from || filter.to || filter.type || filter.search.trim());
+  const [showFilter, setShowFilter] = useState(false);
+  const filterVisible = showFilter || filterActive;
+
+  // Scope to the account in view, resolving orphaned ids the way trades do.
+  const scoped = useMemo(() => {
+    const sorted = sortedTransactions(settings.transactions, accounts);
+    return activeAccountId ? sorted.filter((t) => t.accountId === activeAccountId) : sorted;
+  }, [settings.transactions, accounts, activeAccountId]);
+  const filtered = useMemo(() => filterTransactions(scoped, filter), [scoped, filter]);
+
+  // Running cash balance over the FILTERED set, oldest→newest off the account's
+  // starting balance, so the column reads exactly what the filter shows.
+  const rows = useMemo(() => {
+    const asc = [...filtered].reverse();
+    const out = [];
+    let running = startingBalance;
+    for (let i = 0; i < asc.length; i++) {
+      running += (asc[i].type === "withdrawal" ? -1 : 1) * asc[i].amount;
+      out.push({ ...asc[i], balanceAfter: running });
+    }
+    out.reverse();
+    return out;
+  }, [filtered, startingBalance]);
+
+  const deposits = filtered.filter((t) => t.type === "deposit").reduce((s, t) => s + t.amount, 0);
+  const withdrawals = filtered.filter((t) => t.type === "withdrawal").reduce((s, t) => s + t.amount, 0);
+  // The true account balance is always the real figure — a view filter narrows
+  // what you inspect, not the money you hold — so it sums the UNfiltered scope.
+  const accountBalance = startingBalance + tradesNet + transactionsNet(scoped);
+
+  const multiAccount = accounts.length > 1;
+  const accountName = (id) => accounts.find((a) => a.id === id)?.name || "";
+  const targetAccountId = activeAccountId || accounts[0]?.id || "";
+
+  const saveTxn = (data) => {
+    setSettings((s) => {
+      const list = normalizeTransactions(s.transactions);
+      if (editTxn?.id) return { ...s, transactions: list.map((t) => (t.id === editTxn.id ? { ...t, ...data } : t)) };
+      return { ...s, transactions: [...list, { id: uid("TXN"), accountId: targetAccountId, ...data }] };
+    });
+    onToast?.({ message: editTxn?.id ? "Transaction updated" : `${data.type === "deposit" ? "Deposit" : "Withdrawal"} recorded`, tone: "neutral" });
+  };
+  const removeTxn = (id) => {
+    setSettings((s) => ({ ...s, transactions: normalizeTransactions(s.transactions).filter((t) => t.id !== id) }));
+    onToast?.({ message: "Transaction removed", tone: "neutral" });
+  };
+  const setField = (key) => (e) => setFilter((f) => ({ ...f, [key]: e.target.value }));
+
+  return (
+    <div className="stack">
+      <div className="cards-grid">
+        <Card label="Account Balance" value={fmtCurrency(accountBalance)} icon={Wallet} accentColor="var(--accent)" sub={`Start ${fmtCurrency(startingBalance)} · trades ${fmtSignedCurrency(tradesNet)}`} />
+        <Card label={filterActive ? "Deposits (filtered)" : "Total Deposits"} value={fmtCurrency(deposits)} icon={ArrowDownCircle} accentColor="var(--accent)" />
+        <Card label={filterActive ? "Withdrawals (filtered)" : "Total Withdrawals"} value={fmtCurrency(withdrawals)} icon={ArrowUpCircle} accentColor="var(--accent)" />
+        <Card label="Net Cashflow" value={fmtSignedCurrency(deposits - withdrawals)} icon={ArrowRightLeft} accentColor="var(--accent)" />
+      </div>
+
+      <Panel
+        title="Deposits & Withdrawals"
+        right={
+          <div className="journal-toolbar">
+            <button className={`btn btn-ghost ${filterVisible ? "journal-filter-on" : ""}`} title="Filter transactions" aria-expanded={filterVisible} onClick={() => setShowFilter((s) => !s)}>
+              <Filter size={13} /> Filter{filterActive ? ` (${filtered.length}/${scoped.length})` : ""}
+            </button>
+            <button className="btn btn-primary" onClick={() => setEditTxn({})}><Plus size={14} /> New Transaction</button>
+          </div>
+        }
+      >
+        {scoped.length > 0 && filterVisible && (
+          <div className="journal-filter-row">
+            <Field label="From"><input type="date" className="input" value={filter.from} onChange={setField("from")} /></Field>
+            <Field label="To"><input type="date" className="input" value={filter.to} onChange={setField("to")} /></Field>
+            <Field label="Type">
+              <select className="input" value={filter.type} onChange={setField("type")}>
+                <option value="">All</option>
+                <option value="deposit">Deposits</option>
+                <option value="withdrawal">Withdrawals</option>
+              </select>
+            </Field>
+            <Field label="Search notes"><input className="input" placeholder="Text in a note…" value={filter.search} onChange={setField("search")} /></Field>
+            {filterActive && (
+              <button className="btn btn-ghost journal-filter-clear" onClick={() => setFilter({ from: "", to: "", type: "", search: "" })}>
+                <X size={12} /> Clear ({filtered.length} of {scoped.length})
+              </button>
+            )}
+          </div>
+        )}
+
+        {scoped.length === 0 ? (
+          <EmptyState icon={Wallet} title="No deposits or withdrawals yet" message="Record a deposit to fund this account, or a withdrawal to take money out — the balance adjusts automatically." actionLabel="New Transaction" onAction={() => setEditTxn({})} />
+        ) : filtered.length === 0 ? (
+          <EmptyState icon={Wallet} title="No transactions match this filter" message="Widen the range or clear the search — the transactions are still here." />
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table className="trades-table">
+              <thead>
+                <tr>
+                  <th>Date</th><th>Type</th>{multiAccount && !activeAccountId && <th>Account</th>}<th style={{ textAlign: "right" }}>Amount</th><th style={{ textAlign: "right" }}>Balance</th><th>Note</th><th aria-label="Actions"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((t) => (
+                  <tr key={t.id}>
+                    <td className="mono">{t.date ? fmtDate(parseLocalInputValue(t.date.slice(0, 10))) : "—"}</td>
+                    <td>
+                      <span className={`txn-pill txn-${t.type}`}>
+                        {t.type === "deposit" ? <ArrowDownCircle size={12} /> : <ArrowUpCircle size={12} />}
+                        {t.type === "deposit" ? "Deposit" : "Withdrawal"}
+                      </span>
+                    </td>
+                    {multiAccount && !activeAccountId && <td>{accountName(t.accountId)}</td>}
+                    <td className="mono" style={{ textAlign: "right" }}>{t.type === "withdrawal" ? "−" : "+"}{fmtCurrency(t.amount)}</td>
+                    <td className="mono cell-strong" style={{ textAlign: "right" }}>{fmtCurrency(t.balanceAfter)}</td>
+                    <td style={{ whiteSpace: "normal", maxWidth: 260 }}>{t.note || <span className="hint">—</span>}</td>
+                    <td>
+                      <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+                        <button className="icon-btn" title="Edit" aria-label={`Edit transaction ${t.id}`} onClick={() => setEditTxn(t)}><Pencil size={13} /></button>
+                        <button className="icon-btn icon-btn-danger" title="Delete" aria-label={`Delete transaction ${t.id}`} onClick={() => setDeleteTxn(t)}><Trash2 size={13} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+
+      {editTxn && <TransactionModal initial={editTxn} accountName={multiAccount ? accountName(editTxn.id ? editTxn.accountId : targetAccountId) : ""} onSave={saveTxn} onClose={() => setEditTxn(null)} />}
+      {deleteTxn && (
+        <ConfirmModal
+          title="Delete Transaction" danger confirmLabel="Delete"
+          message={`Delete this ${deleteTxn.type} of ${fmtCurrency(deleteTxn.amount)}${deleteTxn.date ? ` on ${deleteTxn.date.slice(0, 10)}` : ""}? The balance re-adjusts.`}
+          onConfirm={() => removeTxn(deleteTxn.id)} onClose={() => setDeleteTxn(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ============================================================================
+   HELP / ABOUT / GUIDES
+   Read-only reference: the app version, what the app is, per-tab guides, the
+   keyboard shortcuts, and the local-first data/privacy note. The editable
+   journal name / tagline / avatar stay in Settings > About — this tab is the
+   place a new user reads, not a settings screen.
+============================================================================ */
+const HELP_GUIDES = [
+  { icon: LayoutDashboard, title: "Dashboard", body: "Your account headline — balance, total P&L, win rate, streaks and the equity curve. Unfiltered on purpose: it's the whole account at a glance." },
+  { icon: ListChecks, title: "Trades", body: "Every trade, sortable and filterable. Click a row's Edit to open it, or the row itself to view. Import a broker CSV from Settings > Data." },
+  { icon: BarChart3, title: "Analytics", body: "The deep-dive — edge by R, direction, hour of day, duration, asset and strategy. Honours the Trades filters, and each chart windows to the most recent N periods/trades." },
+  { icon: CalendarDays, title: "Calendar", body: "A daily P&L heatmap. Click a day to jump to that day's trades, or add a day note that shows up in the Journal too." },
+  { icon: BookOpen, title: "Journal", body: "Daily, weekly and yearly notes — each grain has its own filter and its own Markdown / CSV / Word / PDF export. The daily grain is the same store the calendar edits." },
+  { icon: Target, title: "Playbook", body: "Your strategies, written down: setup, entry trigger, invalidation, sizing. A note survives its strategy being renamed away and back." },
+  { icon: Wallet, title: "Cashflow", body: "Deposits and withdrawals, per account, with a running balance and its own filter. The account balance = starting balance + trade P&L + net cashflow." },
+  { icon: FileDown, title: "Reports", body: "Export a professional trading report (Excel / Word / PDF) for any scope — one account or all pooled." },
+  { icon: SettingsIcon, title: "Settings", body: "Accounts, goals, timezone, appearance, the login gate, and backups. Restore replaces everything, so back up first." },
+];
+export function HelpPanel({ settings }) {
+  return (
+    <div className="stack">
+      <Panel title="About">
+        <div className="about-row">
+          <div><div className="about-title">{settings?.journalName?.trim() || APP_NAME}</div>
+          <div className="hint">{APP_NAME} · Version {APP_VERSION} · Local-first trading performance journal for crypto, forex, commodities, stocks &amp; futures. No account, no network — your data stays on this device.</div></div>
+        </div>
+      </Panel>
+      <Panel title="Guides — what each tab does">
+        <div className="help-guides">
+          {HELP_GUIDES.map((g) => (
+            <div key={g.title} className="help-guide">
+              <div className="help-guide-head"><g.icon size={15} /> <span className="about-title" style={{ fontSize: 13.5 }}>{g.title}</span></div>
+              <p className="hint" style={{ margin: 0 }}>{g.body}</p>
+            </div>
+          ))}
+        </div>
+      </Panel>
+      <Panel title="Keyboard shortcuts">
+        <div className="help-guides">
+          {[
+            ["Ctrl/Cmd + N", "New trade"], ["Ctrl/Cmd + K", "Command palette"], ["Ctrl/Cmd + B", "Collapse / expand sidebar"],
+            ["Ctrl/Cmd + 1–9", "Jump to a tab"], ["Alt + ← / →", "Back / forward"], ["Ctrl/Cmd + = / − / 0", "Zoom in / out / reset"], ["?", "All shortcuts"],
+          ].map(([k, d]) => (
+            <div key={k} className="help-shortcut"><kbd className="mono">{k}</kbd><span className="hint">{d}</span></div>
+          ))}
+        </div>
+      </Panel>
+      <Panel title="Your data &amp; privacy">
+        <p className="hint" style={{ margin: 0, lineHeight: 1.6 }}>
+          Everything is stored locally — in this app's own storage on the desktop build, or your browser's IndexedDB on the web build. Nothing is uploaded. Back up regularly from Settings &gt; Data (a restore replaces everything). The optional login gate in Settings &gt; Security keeps a casual second person out of the running app; it is not disk encryption.
+        </p>
+      </Panel>
     </div>
   );
 }
@@ -2732,13 +3153,15 @@ function DashboardPanel({ trades, settings, chartMode = "amount", setChartMode }
       yearlyProfit: sumWhere((t) => new Date(t.exitDateTime).getFullYear() === yearKey),
       points: curve,
       dailyData: daily,
-      balance: startingBalance + stats.net,
+      // Balance folds in cashflow (deposits − withdrawals) alongside trade P&L,
+      // so this card agrees with the Cashflow tab and the account list.
+      balance: startingBalance + stats.net + transactionsNet(settings.transactions),
       ...maxDrawdown(curve),
       streaks: consecutiveStreaks(trades),
       openCount: trades.filter((t) => t.status === "Open").length,
       ...sharpeSortino(daily.map((d) => d.pnl), startingBalance),
     };
-  }, [trades, startingBalance, today, wk, mo, yearKey]);
+  }, [trades, startingBalance, settings.transactions, today, wk, mo, yearKey]);
 
   const goals = useMemo(() => ({ ...DEFAULT_GOALS, ...(settings.goals || {}) }), [settings.goals]);
   const dailyLossBreach = goals.maxDailyLoss > 0 && todayPnl < 0 && Math.abs(todayPnl) >= goals.maxDailyLoss;
@@ -2835,15 +3258,24 @@ function AnalyticsPanel({ trades, chartMode, setChartMode, preferences, setPrefe
   }, [trades]);
 
   const windowed = (rows, count) => (count ? rows.slice(-count) : rows);
-  const periodPicker = (key, label) => (
+  // Same picker for both flavours; `suffix` only changes the option wording
+  // ("Last 5" periods vs "Last 5 trades").
+  const chartPicker = (key, label, suffix = "") => (
     <select
       className="input chart-period-select" aria-label={label} title={label}
       value={preferences?.[key] ?? 5}
       onChange={(e) => setPreferences?.((p) => ({ ...p, [key]: Number(e.target.value) }))}
     >
-      {CHART_PERIOD_CHOICES.map((n) => <option key={n} value={n}>{n === 0 ? "All" : `Last ${n}`}</option>)}
+      {CHART_PERIOD_CHOICES.map((n) => <option key={n} value={n}>{n === 0 ? "All" : `Last ${n}${suffix}`}</option>)}
     </select>
   );
+  const periodPicker = (key, label) => chartPicker(key, label);
+  // The trade-based charts (RR, hour-of-day, duration) window to the most
+  // recent N *closed trades* rather than periods — memoised per count so
+  // flipping one picker doesn't re-sort for the others.
+  const rrTrades = useMemo(() => mostRecentTrades(closed, preferences?.rrChartCount ?? 5), [closed, preferences?.rrChartCount]);
+  const hourTrades = useMemo(() => mostRecentTrades(closed, preferences?.hourChartCount ?? 5), [closed, preferences?.hourChartCount]);
+  const durationTrades = useMemo(() => mostRecentTrades(closed, preferences?.durationChartCount ?? 5), [closed, preferences?.durationChartCount]);
 
   return (
     <div className="stack">
@@ -2867,14 +3299,16 @@ function AnalyticsPanel({ trades, chartMode, setChartMode, preferences, setPrefe
         </Panel>
       </div>
       <div className="two-col">
-        <Panel title="Yearly Performance"><PerformanceBarChart data={yearlyData} labelKey="year" mode={chartMode} /></Panel>
-        <Panel title="RR Distribution"><RRDistributionChart trades={closed} /></Panel>
+        <Panel title="Yearly Performance" right={periodPicker("yearlyChartCount", "Years shown")}>
+          <PerformanceBarChart data={windowed(yearlyData, preferences?.yearlyChartCount)} labelKey="year" mode={chartMode} />
+        </Panel>
+        <Panel title="RR Distribution" right={chartPicker("rrChartCount", "Trades shown", " trades")}><RRDistributionChart trades={rrTrades} /></Panel>
       </div>
       <div className="two-col">
-        <Panel title="Performance by Hour of Day"><HourOfDayChart trades={closed} /></Panel>
+        <Panel title="Performance by Hour of Day" right={chartPicker("hourChartCount", "Trades shown", " trades")}><HourOfDayChart trades={hourTrades} /></Panel>
         <Panel title="Performance by Day of Week"><DayOfWeekChart trades={closed} /></Panel>
       </div>
-      <Panel title="Trade Duration Analysis" right={<Badge tone="neutral">Win vs Loss by hold time</Badge>}><DurationHistogramChart trades={closed} /></Panel>
+      <Panel title="Trade Duration Analysis" right={<div style={{ display: "flex", gap: 8, alignItems: "center" }}><Badge tone="neutral">Win vs Loss by hold time</Badge>{chartPicker("durationChartCount", "Trades shown", " trades")}</div>}><DurationHistogramChart trades={durationTrades} /></Panel>
       {hasMaeMfe && (
         <Panel title="Trade Efficiency — MAE / MFE" right={<Badge tone="accent">Captured vs. best move</Badge>}>
           <div className="hint" style={{ marginBottom: 8 }}>Each dot is a closed trade: how far it ran in your favor (MFE, x-axis) against what you actually banked (P&amp;L, y-axis). The dashed line is a perfect exit — dots below it gave profit back.</div>
@@ -3212,11 +3646,19 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
 ============================================================================ */
 // Exported for the component smoke tests (App.test.jsx) — App itself is still
 // the only intended consumer.
-export function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, setTheme, strategies, onImportTrades, activeAccountId, setActiveAccountId, preferences, setPreferences }) {
+export function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, setTheme, strategies, onImportTrades, activeAccountId, setActiveAccountId, preferences, setPreferences, users = [], setUsers, currentUser, onAuthenticated }) {
   // ~400 zones × an Intl formatter each is a one-time cost taken when Settings
   // mounts, not on every keystroke in the panel. Offsets are "now"-relative
-  // (DST), which is as precise as a picker label needs to be.
-  const tzOptions = useMemo(() => TIMEZONE_CHOICES.map((z) => ({ z, off: tzOffsetLabel(z) })), []);
+  // (DST), which is as precise as a picker label needs to be. Ordered by the
+  // offset itself (west to east), alphabetical within an offset — a trader
+  // hunting "somewhere at GMT+2" scans one contiguous block instead of the
+  // whole alphabet.
+  const tzOptions = useMemo(() => {
+    const now = new Date();
+    return TIMEZONE_CHOICES
+      .map((z) => ({ z, mins: tzOffsetMinutes(z, now), off: tzOffsetLabel(z, now) }))
+      .sort((a, b) => (a.mins - b.mins) || a.z.localeCompare(b.z));
+  }, []);
   const fileRef = useRef(null);
   const csvRef = useRef(null);
   const [msg, setMsg] = useState("");
@@ -3245,11 +3687,19 @@ export function SettingsPanel({ settings, setSettings, trades, replaceAllData, t
   // What each account is actually worth, for the list below. Trades arrive here
   // already computed and unscoped, which is the point — this panel is the one
   // place that describes every account rather than just the one in view.
+  // Each account's balance folds in its cashflow (deposits − withdrawals) the
+  // same way the Dashboard and Cashflow tab do, so the three never disagree.
+  const txnByAccount = useMemo(() => {
+    const m = {};
+    sortedTransactions(settings.transactions, accounts).forEach((t) => { m[t.accountId] = (m[t.accountId] || 0) + (t.type === "withdrawal" ? -1 : 1) * t.amount; });
+    return m;
+  }, [settings.transactions, accounts]);
   const accountRows = useMemo(() => accounts.map((a) => {
     const own = trades.filter((t) => t.accountId === a.id);
     const stats = summarize(own);
-    return { account: a, count: own.length, net: stats.net, balance: (a.startingBalance || 0) + stats.net };
-  }), [accounts, trades]);
+    const cash = txnByAccount[a.id] || 0;
+    return { account: a, count: own.length, net: stats.net, balance: (a.startingBalance || 0) + stats.net + cash };
+  }), [accounts, trades, txnByAccount]);
   const setAccount = (id, key) => (e) => {
     const raw = e.target.value;
     const v = key === "startingBalance" ? (num(raw, 0) || 0) : raw;
@@ -3420,6 +3870,8 @@ export function SettingsPanel({ settings, setSettings, trades, replaceAllData, t
         </div>
       </Panel>
 
+      {setUsers && <SecurityPanel users={users} setUsers={setUsers} currentUser={currentUser} onAuthenticated={onAuthenticated} />}
+
       <Panel title="Appearance">
         <div className="theme-grid">
           {Object.entries(THEMES).map(([key, meta]) => {
@@ -3573,12 +4025,154 @@ function LiveClock({ format = "12h" }) {
     return () => clearInterval(id);
   }, []);
   const time = zonedNow(tz, tick);
-  const dateStr = time.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  const dateStr = time.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
   const hm = time.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: format !== "24h" });
   // A journal pinned to another zone marks the clock with its offset, so a
   // glance explains why it disagrees with the machine's taskbar.
   const off = tz ? ` ${tzOffsetLabel(tz, tick)}` : "";
   return <span className="mono live-clock" title={tz ? `Journal timezone: ${tz}` : "Machine time"}>{dateStr}, {hm}{off}</span>;
+}
+
+/* ============================================================================
+   LOGIN GATE
+   A soft, opt-in gate: it only appears once at least one user has been created
+   (Settings > Security). No self-signup here — a stranger must not be able to
+   register past the gate — so account creation lives inside the app, behind it.
+   Multi-user: any registered user can log in by name; verification is against
+   the stored PBKDF2 hash in ./lib/auth. Web-future: swap onLogin's local verify
+   for a network call and this screen is unchanged (see ARCHITECTURE.md § Auth).
+============================================================================ */
+function PasswordInput({ value, onChange, placeholder, autoFocus, onEnter }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="auth-pw-wrap">
+      <input
+        className="input" type={show ? "text" : "password"} value={value} placeholder={placeholder}
+        autoFocus={autoFocus} onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && onEnter) onEnter(); }}
+      />
+      <button type="button" className="auth-pw-toggle" title={show ? "Hide" : "Show"} aria-label={show ? "Hide password" : "Show password"} onClick={() => setShow((s) => !s)}>
+        {show ? <EyeOff size={15} /> : <Eye size={15} />}
+      </button>
+    </div>
+  );
+}
+// Exported for the component smoke tests (App.test.jsx).
+export function AuthGate({ users, journalName, onAuthenticated }) {
+  const [username, setUsername] = useState(users.length === 1 ? users[0].username : "");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setError("");
+    const user = findUser(users, username);
+    if (!user) { setError("No account with that username."); return; }
+    setBusy(true);
+    try {
+      const ok = await verifyPassword(password, user.salt, user.hash);
+      if (ok) onAuthenticated(user);
+      else setError("Incorrect password.");
+    } catch { setError("Could not verify — try again."); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="auth-gate">
+      <div className="auth-card">
+        <div className="auth-brand"><Lock size={20} /><span className="auth-brand-text">{journalName}</span></div>
+        <div className="auth-sub">Sign in to open your journal.</div>
+        <div className="stack" style={{ gap: 12 }}>
+          <Field label="Username">
+            <input className="input" value={username} autoFocus={users.length !== 1} placeholder="Your username" onChange={(e) => setUsername(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+          </Field>
+          <Field label="Password">
+            <PasswordInput value={password} onChange={setPassword} placeholder="Your password" autoFocus={users.length === 1} onEnter={submit} />
+          </Field>
+          {error && <div className="auth-error">{error}</div>}
+          <button className="btn btn-primary" disabled={busy || !username || !password} onClick={submit} style={{ justifyContent: "center" }}>
+            {busy ? <Loader2 size={15} className="spin" /> : <LogIn size={15} />} Sign in
+          </button>
+          <div className="hint" style={{ fontSize: 11.5, lineHeight: 1.5 }}>
+            The gate protects the running app, not the files on disk. Forgot your password? Remove the login files from this app's storage folder to reset — your journal data is separate and stays intact.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+// Settings > Security: create the first account (turns the gate on), add more
+// users, or remove them (removing the last turns the gate off). This is the
+// only place accounts are created — the gate itself never self-registers.
+function SecurityPanel({ users, setUsers, currentUser, onAuthenticated }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [removeUser, setRemoveUser] = useState(null);
+
+  const addUser = async () => {
+    setError("");
+    if (!username.trim()) { setError("Pick a username."); return; }
+    if (findUser(users, username)) { setError("That username is taken."); return; }
+    if (password.length < 4) { setError("Password must be at least 4 characters."); return; }
+    if (password !== confirm) { setError("Passwords don't match."); return; }
+    setBusy(true);
+    try {
+      const user = await makeUser(username, password);
+      const firstAccount = users.length === 0;
+      setUsers((list) => [...normalizeUsers(list), user]);
+      setUsername(""); setPassword(""); setConfirm("");
+      // Creating the very first account turns the gate on this instant. Sign the
+      // creator in so they aren't bounced to the login screen mid-session; the
+      // gate then only appears on a fresh launch, as intended.
+      if (firstAccount) onAuthenticated?.(user);
+    } catch (e) { setError(e?.message || "Could not create account."); }
+    finally { setBusy(false); }
+  };
+  const doRemove = (id) => setUsers((list) => normalizeUsers(list).filter((u) => u.id !== id));
+
+  return (
+    <Panel title="Security — login gate" className="settings-section">
+      <p className="hint" style={{ marginBottom: 12, lineHeight: 1.55 }}>
+        {users.length === 0
+          ? "No login is set. Create an account to turn on a login gate — after that, opening the app asks for a username and password. This guards the running app, not the files on disk."
+          : `The login gate is on. ${users.length} account${users.length === 1 ? "" : "s"} can sign in.`}
+      </p>
+      {users.length > 0 && (
+        <div className="stack" style={{ gap: 8, marginBottom: 16 }}>
+          {users.map((u) => (
+            <div key={u.id} className="account-row" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <Users size={14} /><span className="cell-strong">{u.username}</span>
+              {currentUser?.id === u.id && <Badge tone="accent">You</Badge>}
+              <button className="btn btn-ghost row-edit-btn" style={{ marginLeft: "auto" }} onClick={() => setRemoveUser(u)} disabled={users.length === 1 && currentUser?.id === u.id ? false : false}>
+                <Trash2 size={12} /> Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="form-grid">
+        <Field label={users.length === 0 ? "Username" : "New username"}><input className="input" value={username} placeholder="e.g. brij" onChange={(e) => setUsername(e.target.value)} /></Field>
+        <Field label="Password"><PasswordInput value={password} onChange={setPassword} placeholder="At least 4 characters" /></Field>
+        <Field label="Confirm password"><PasswordInput value={confirm} onChange={setConfirm} placeholder="Repeat password" onEnter={addUser} /></Field>
+      </div>
+      {error && <div className="auth-error" style={{ marginTop: 8 }}>{error}</div>}
+      <div style={{ marginTop: 12 }}>
+        <button className="btn btn-primary" disabled={busy} onClick={addUser}>
+          {busy ? <Loader2 size={14} className="spin" /> : <UserPlus size={14} />} {users.length === 0 ? "Create account & turn on gate" : "Add user"}
+        </button>
+      </div>
+      {removeUser && (
+        <ConfirmModal
+          title="Remove account" danger confirmLabel="Remove"
+          message={`Remove ${removeUser.username}?${users.length === 1 ? " This turns the login gate off — the app will open without a password." : ""}`}
+          onConfirm={() => doRemove(removeUser.id)} onClose={() => setRemoveUser(null)}
+        />
+      )}
+    </Panel>
+  );
 }
 
 /* ============================================================================
@@ -3591,8 +4185,10 @@ const NAV = [
   { key: "calendar", label: "Calendar", icon: CalendarDays },
   { key: "journal", label: "Journal", icon: BookOpen },
   { key: "playbook", label: "Playbook", icon: Target },
+  { key: "cashflow", label: "Cashflow", icon: Wallet },
   { key: "reports", label: "Reports", icon: FileDown },
   { key: "settings", label: "Settings", icon: SettingsIcon },
+  { key: "help", label: "Help", icon: LifeBuoy },
 ];
 
 export default function App() {
@@ -3607,6 +4203,13 @@ export default function App() {
   const [tradeSeqHigh, setTradeSeqHigh] = useState(0);
   const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES);
   const [loaded, setLoaded] = useState(false);
+  // Login gate. `users` is the registered accounts (empty = gate off); `authUser`
+  // is the session's signed-in user, held in memory only so closing the app
+  // signs out. `authLoaded` gates the first render on the auth store having been
+  // read, so the app never flashes past the gate before users load.
+  const [users, setUsers] = useState([]);
+  const [authUser, setAuthUser] = useState(null);
+  const [authLoaded, setAuthLoaded] = useState(false);
   const [tab, setTabState] = useState("dashboard");
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -3798,6 +4401,30 @@ export default function App() {
     return () => { mounted = false; };
   }, []);
 
+  // The login gate's user store, loaded from its own key (never the meta blob —
+  // password hashes must not ride along in a journal backup). A read failure
+  // leaves the gate off rather than locking the owner out of their own data.
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const res = await storage.get(AUTH_KEY, false);
+        const parsed = res?.value ? JSON.parse(res.value) : null;
+        if (mounted && parsed) setUsers(normalizeUsers(parsed.users));
+      } catch (e) { console.error("Could not read auth store", e); }
+      if (mounted) setAuthLoaded(true);
+    })();
+    return () => { mounted = false; };
+  }, []);
+  // Persist the user store when it changes (after the initial load, so the empty
+  // seed never overwrites a real store). A removed last user turns the gate off.
+  const authWrittenRef = useRef(false);
+  useEffect(() => {
+    if (!authLoaded) return;
+    if (!authWrittenRef.current) { authWrittenRef.current = true; return; }
+    storage.set(AUTH_KEY, JSON.stringify({ users: normalizeUsers(users) }), false).catch((e) => console.error("Auth save failed", e));
+  }, [users, authLoaded]);
+
   // Meta and trades are saved by separate effects on purpose. Preferences churn
   // constantly — every tab switch and calendar step writes them — and folding
   // that into the trade save would rewrite all SHARD_COUNT shards each time, for
@@ -3918,10 +4545,18 @@ export default function App() {
     () => (activeAccount ? activeAccount.startingBalance : accounts.reduce((s, a) => s + (a.startingBalance || 0), 0)),
     [activeAccount, accounts]
   );
-  // Everything downstream reads settings.startingBalance for the account it is
-  // scoped to; handing it a settings whose balance already matches the scope
-  // keeps that plumbing out of every panel.
-  const scopedSettings = useMemo(() => ({ ...settings, startingBalance }), [settings, startingBalance]);
+  // Cashflow scoped to the account in view: deposits and withdrawals adjust the
+  // balance alongside trade P&L. Orphaned account ids resolve to the first
+  // account, matching how trades resolve.
+  const scopedTransactions = useMemo(() => {
+    const sorted = sortedTransactions(settings.transactions, accounts);
+    return activeAccountId ? sorted.filter((t) => t.accountId === activeAccountId) : sorted;
+  }, [settings.transactions, accounts, activeAccountId]);
+  const cashNet = useMemo(() => transactionsNet(scopedTransactions), [scopedTransactions]);
+  // Everything downstream reads settings.startingBalance and settings.transactions
+  // for the account it is scoped to; handing it a settings whose balance and
+  // cashflow already match the scope keeps that plumbing out of every panel.
+  const scopedSettings = useMemo(() => ({ ...settings, startingBalance, transactions: scopedTransactions }), [settings, startingBalance, scopedTransactions]);
 
   const filtered = useMemo(() => {
     const range = dateRangeForPreset(filters.datePreset, zonedNow(settings.timezone), filters.dateFrom, filters.dateTo);
@@ -4133,7 +4768,7 @@ export default function App() {
   // Feeds the ticker, which is on screen for every tab — so this walks the whole
   // journal on any App re-render unless it's held here.
   const overall = useMemo(() => summarize(scopedTrades), [scopedTrades]);
-  const balance = startingBalance + overall.net;
+  const balance = startingBalance + overall.net + cashNet;
   const tickerItems = [
     { label: "BALANCE", value: fmtCurrency(balance), color: "var(--text-primary)" },
     { label: "TOTAL P&L", value: fmtCurrency(overall.net), color: overall.net >= 0 ? "var(--profit)" : "var(--loss)" },
@@ -4175,6 +4810,12 @@ export default function App() {
     );
   }
 
+  // Signed-in state, derived rather than stored: if the session's user is
+  // removed from the store, this recomputes to false and the gate returns —
+  // no effect needed to clear a stale session. A stale authUser in state is
+  // harmless because nothing reads it directly; everything reads `signedIn`.
+  const signedIn = !!authUser && users.some((u) => u.id === authUser.id);
+
   // Trades could not be read. Saving is disabled while this is showing, so the
   // journal on disk is left exactly as it is rather than being overwritten by an
   // empty one. Presenting an empty dashboard here would be worse than useless:
@@ -4191,6 +4832,20 @@ export default function App() {
           <p className="mono boot-error-detail">{loadError}</p>
           <button className="btn btn-primary" onClick={() => window.location.reload()}><RotateCcw size={14} /> Try again</button>
         </div>
+      </div>
+    );
+  }
+
+  // The login gate: shown once the auth store has loaded and at least one user
+  // exists but none is signed in. Themed like the app, so it isn't a bare white
+  // page while the theme sheet is present below.
+  if (authLoaded && users.length > 0 && !signedIn) {
+    return (
+      <div className={`app-root ${preferences.density === "compact" ? "density-compact" : ""}`}>
+        <style>{APP_CSS}</style>
+        <style>{themeCss}</style>
+        {accentCss && <style>{accentCss}</style>}
+        <AuthGate users={users} journalName={journalName} onAuthenticated={setAuthUser} />
       </div>
     );
   }
@@ -4222,22 +4877,22 @@ export default function App() {
             {n.key === "trades" && openCount > 0 && <span className="nav-badge"><Badge tone="accent">{openCount}</Badge></span>}
           </button>
         ))}
-        <div className="sidebar-footer">Data stored locally in this app. Ctrl/Cmd+K — command palette · Ctrl/Cmd+N — new trade · Ctrl/Cmd+1–8 — tabs · Alt+← / → — back &amp; forward · ? — all shortcuts.</div>
+        <div className="sidebar-footer">Data stored locally in this app. Ctrl/Cmd+K — command palette · Ctrl/Cmd+N — new trade · Ctrl/Cmd+1–9 — tabs · Alt+← / → — back &amp; forward · ? — all shortcuts.</div>
       </aside>
 
       <div className="main-col">
         <div className="topbar">
           <div className="topbar-left">
             <button
-              className="icon-btn" onClick={toggleSidebar}
+              className="icon-btn icon-btn-min" onClick={toggleSidebar}
               title={`${sidebarCollapsed ? "Expand" : "Collapse"} sidebar (Ctrl/Cmd+B)`}
               aria-label={`${sidebarCollapsed ? "Expand" : "Collapse"} sidebar`} aria-expanded={!sidebarCollapsed} aria-controls="app-sidebar"
             >
               {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
             </button>
             <div className="nav-arrows">
-              <button className="icon-btn" onClick={() => goHistory(-1)} disabled={!canGoBack} title="Back (Alt+←)" aria-label="Back"><ArrowLeft size={16} /></button>
-              <button className="icon-btn" onClick={() => goHistory(1)} disabled={!canGoForward} title="Forward (Alt+→)" aria-label="Forward"><ArrowRight size={16} /></button>
+              <button className="icon-btn icon-btn-min" onClick={() => goHistory(-1)} disabled={!canGoBack} title="Back (Alt+←)" aria-label="Back"><ArrowLeft size={15} /></button>
+              <button className="icon-btn icon-btn-min" onClick={() => goHistory(1)} disabled={!canGoForward} title="Forward (Alt+→)" aria-label="Forward"><ArrowRight size={15} /></button>
             </div>
             <div>
               <h2>{NAV.find((n) => n.key === tab)?.label}</h2>
@@ -4249,10 +4904,12 @@ export default function App() {
                 {tab === "trades" && `${filtered.length} of ${scopedTrades.length} trades shown`}
                 {tab === "analytics" && "Deep-dive into edge, direction, grade and strategy"}
                 {tab === "calendar" && "Daily P&L heatmap"}
-                {tab === "journal" && "Daily notes — shared with the calendar's day journal"}
+                {tab === "journal" && "Daily, weekly & yearly notes — shared with the calendar's day journal"}
                 {tab === "playbook" && "Your strategies, written down — setup, trigger, invalidation"}
+                {tab === "cashflow" && "Deposits, withdrawals & running balance"}
                 {tab === "reports" && "Export professional trading reports"}
-                {tab === "settings" && "Account, appearance and backups"}
+                {tab === "settings" && "Accounts, security, appearance and backups"}
+                {tab === "help" && "About, per-tab guides & keyboard shortcuts"}
               </div>
             </div>
           </div>
@@ -4273,6 +4930,9 @@ export default function App() {
             </div>
           )}
           <button className="btn btn-primary" onClick={() => { setEditing(null); setSeedTrade(null); setShowForm(true); }}><PlusCircle size={15} /> New Trade</button>
+          {signedIn && (
+            <button className="icon-btn icon-btn-min" title={`Sign out (${authUser.username})`} aria-label={`Sign out ${authUser.username}`} onClick={() => setAuthUser(null)}><LogOut size={16} /></button>
+          )}
         </div>
 
         <TickerStrip items={tickerItems} />
@@ -4322,12 +4982,15 @@ export default function App() {
           {tab === "calendar" && <PerformanceCalendar trades={scopedTrades} preferences={preferences} setPreferences={setPreferences} onSelectDay={(d) => { setDayFilter(d); setTab("trades"); }} />}
           {tab === "journal" && <JournalPanel trades={scopedTrades} preferences={preferences} setPreferences={setPreferences} onSelectDay={(d) => { setDayFilter(d); setTab("trades"); }} onToast={pushToast} />}
           {tab === "playbook" && <PlaybookPanel settings={settings} setSettings={setSettings} strategies={strategies} setStrategies={setStrategies} trades={scopedTrades} />}
+          {tab === "cashflow" && <CashflowPanel settings={settings} setSettings={setSettings} accounts={accounts} activeAccountId={activeAccountId} startingBalance={startingBalance} tradesNet={overall.net} onToast={pushToast} />}
           {tab === "reports" && <ReportsPanel allTrades={scopedTrades} filteredTrades={filtered} filtersActive={filtersActive} settings={scopedSettings} scopeLabel={activeAccount?.name || (accounts.length > 1 ? "All Accounts" : "")} onToast={pushToast} />}
+          {tab === "help" && <HelpPanel settings={settings} />}
           {tab === "settings" && (
             <SettingsPanel
               settings={settings} setSettings={setSettings} trades={computedTrades} theme={theme} setTheme={setTheme}
               strategies={strategies} onImportTrades={importTrades}
               activeAccountId={activeAccountId} setActiveAccountId={setActiveAccountId}
+              users={users} setUsers={setUsers} currentUser={signedIn ? authUser : null} onAuthenticated={setAuthUser}
               preferences={preferences} setPreferences={setPreferences}
               replaceAllData={async (s, t, strat) => {
                 // mergeSettings: a restored backup can predate accounts entirely,

@@ -25,9 +25,10 @@ import {
   parseCSV, csvCell, tradesToCSV, rowsToTrades, normalizeCsvDate, partitionDuplicateImports, escapeHtml,
   isoDate, isoWeekKey, monthKey, weekOfMonthKey, durationLabel,
   dateInRange, dateRangeForPreset, startOfWeek, toLocalInputValue,
-  zonedNow, isValidTimeZone, normalizeTimezone, tzOffsetLabel,
+  zonedNow, isValidTimeZone, normalizeTimezone, tzOffsetLabel, tzOffsetMinutes,
   journalEntries, journalToMarkdown, journalToCSV, journalToHtml, filterJournalEntries,
-  normalizeChartCount, CHART_PERIOD_CHOICES,
+  normalizeChartCount, CHART_PERIOD_CHOICES, mostRecentTrades,
+  normalizeTransactions, transactionsNet, filterTransactions, sortedTransactions, TRANSACTION_TYPES,
   emptyTrade, tradeToForm, withDerivedFills, formSignature, tradeWarnings,
 } from "./trade";
 
@@ -516,9 +517,23 @@ describe("mergePreferences", () => {
   it("constrains the analytics chart period counts to the picker's ladder", () => {
     expect(mergePreferences({}).weeklyChartCount).toBe(5);
     expect(mergePreferences({}).monthlyChartCount).toBe(5);
-    expect(mergePreferences({ weeklyChartCount: 12, monthlyChartCount: 0 })).toMatchObject({ weeklyChartCount: 12, monthlyChartCount: 0 });
-    expect(mergePreferences({ weeklyChartCount: 7, monthlyChartCount: "9" })).toMatchObject({ weeklyChartCount: 5, monthlyChartCount: 5 });
+    expect(mergePreferences({}).yearlyChartCount).toBe(5);
+    expect(mergePreferences({ weeklyChartCount: 12, monthlyChartCount: 0, yearlyChartCount: 3 })).toMatchObject({ weeklyChartCount: 12, monthlyChartCount: 0, yearlyChartCount: 3 });
+    expect(mergePreferences({ weeklyChartCount: 7, monthlyChartCount: "9", yearlyChartCount: -1 })).toMatchObject({ weeklyChartCount: 5, monthlyChartCount: 5, yearlyChartCount: 5 });
     CHART_PERIOD_CHOICES.forEach((n) => expect(normalizeChartCount(n)).toBe(n));
+  });
+
+  it("constrains the trade-based chart windows to the same ladder", () => {
+    expect(mergePreferences({})).toMatchObject({ rrChartCount: 5, hourChartCount: 5, durationChartCount: 5 });
+    expect(mergePreferences({ rrChartCount: 8, hourChartCount: 0, durationChartCount: 12 })).toMatchObject({ rrChartCount: 8, hourChartCount: 0, durationChartCount: 12 });
+    expect(mergePreferences({ rrChartCount: 99 }).rrChartCount).toBe(5);
+  });
+
+  it("defaults the weekly and yearly note stores to empty maps and preserves what's stored", () => {
+    expect(mergePreferences({})).toMatchObject({ weekNotes: {}, yearNotes: {} });
+    const p = mergePreferences({ weekNotes: { "2026-W29": "note" }, yearNotes: { "2026": "recap" } });
+    expect(p.weekNotes).toEqual({ "2026-W29": "note" });
+    expect(p.yearNotes).toEqual({ "2026": "recap" });
   });
 
   it("backfills filters a stored preference set is missing", () => {
@@ -1093,6 +1108,13 @@ describe("tzOffsetLabel", () => {
     expect(tzOffsetLabel("America/New_York", new Date("2026-07-15T12:00:00Z"))).toBe("GMT-4");
   });
 
+  // The Settings picker sorts by this number so the list runs west to east.
+  it("exposes the raw offset in minutes for sorting, NaN for junk", () => {
+    expect(tzOffsetMinutes("Asia/Kolkata", new Date("2026-07-15T12:00:00Z"))).toBe(330);
+    expect(tzOffsetMinutes("America/New_York", new Date("2026-07-15T12:00:00Z"))).toBe(-240);
+    expect(tzOffsetMinutes("Not/AZone")).toBeNaN();
+  });
+
   it("carries half-hour offsets", () => {
     expect(tzOffsetLabel("Asia/Kolkata", new Date("2026-07-15T12:00:00Z"))).toBe("GMT+5:30");
   });
@@ -1187,6 +1209,102 @@ describe("daily journal export", () => {
     expect(word).not.toContain("@page");
     expect(pdf).toContain("@page{size:A4");
     expect(pdf).not.toContain("schemas-microsoft-com");
+  });
+
+  // The weekly and yearly journals reuse the same reader with a different key
+  // shape. A day-keyed note must not leak into the weekly list, and vice versa.
+  it("reads week- and year-keyed stores by kind, ignoring foreign key shapes", () => {
+    const mixed = {
+      "2026-W29": "Big trend week.",
+      "2026-W27": "Consolidation week.",
+      "2026": "Strong first half.",
+      "2026-07-17": "a daily note",
+      "bad": "junk",
+    };
+    expect(journalEntries(mixed, "week").map(([k]) => k)).toEqual(["2026-W29", "2026-W27"]);
+    expect(journalEntries(mixed, "year").map(([k]) => k)).toEqual(["2026"]);
+    expect(journalEntries(mixed, "day").map(([k]) => k)).toEqual(["2026-07-17"]);
+  });
+
+  it("filters and exports week-keyed entries the same way", () => {
+    const week = journalEntries({ "2026-W29": "Trend.", "2026-W27": "Chop." }, "week");
+    expect(filterJournalEntries(week, { search: "trend" }).map(([k]) => k)).toEqual(["2026-W29"]);
+    expect(journalToMarkdown(week)).toContain("## 2026-W29");
+  });
+});
+
+describe("mostRecentTrades", () => {
+  const mk = (id, exit) => ({ id, exitDateTime: exit });
+  const trades = [
+    mk("a", "2026-07-10T11:00"), mk("b", "2026-07-15T09:00"),
+    mk("c", "2026-07-12T14:00"), mk("d", "2026-07-18T10:00"),
+  ];
+
+  it("returns the newest N by exit time, newest first", () => {
+    expect(mostRecentTrades(trades, 2).map((t) => t.id)).toEqual(["d", "b"]);
+  });
+
+  it("returns everything, unmutated, when count is 0", () => {
+    expect(mostRecentTrades(trades, 0)).toBe(trades);
+    expect(trades.map((t) => t.id)).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("sorts trades without an exit time last", () => {
+    const withOpen = [mk("open", ""), mk("closed", "2026-07-01T09:00")];
+    expect(mostRecentTrades(withOpen, 1).map((t) => t.id)).toEqual(["closed"]);
+  });
+});
+
+describe("cashflow — deposits & withdrawals", () => {
+  const txns = [
+    { id: "t1", type: "deposit", amount: 1000, date: "2026-07-01", accountId: "acct-main", note: "Initial funding" },
+    { id: "t2", type: "withdrawal", amount: 250, date: "2026-07-10", accountId: "acct-main", note: "Profit taking" },
+    { id: "t3", type: "deposit", amount: 500, date: "2026-07-15", accountId: "acct-2", note: "" },
+  ];
+
+  it("normalizes: stores amounts positive, drops junk and non-positive rows", () => {
+    const cleaned = normalizeTransactions([
+      { type: "deposit", amount: -300, date: "2026-07-01" }, // sign lives in type, not amount
+      { type: "withdrawal", amount: "40.5", date: "2026-07-02", note: "x" },
+      { type: "deposit", amount: 0 },                          // non-positive drops
+      { type: "transfer", amount: 100 },                       // unknown type drops
+      { amount: 100 },                                         // no type drops
+      "nope",                                                   // not an object
+    ]);
+    expect(cleaned).toHaveLength(2);
+    expect(cleaned[0]).toMatchObject({ type: "deposit", amount: 300 });
+    expect(cleaned[1]).toMatchObject({ type: "withdrawal", amount: 40.5, note: "x" });
+    expect(cleaned[0].id).toBeTruthy(); // an id is minted when absent
+  });
+
+  it("nets deposits up and withdrawals down", () => {
+    expect(transactionsNet(txns)).toBe(1000 - 250 + 500);
+    expect(transactionsNet([])).toBe(0);
+    expect(transactionsNet(null)).toBe(0);
+  });
+
+  it("filters by type, date range and note text — nothing else", () => {
+    expect(filterTransactions(txns, { type: "deposit" }).map((t) => t.id)).toEqual(["t1", "t3"]);
+    expect(filterTransactions(txns, { from: "2026-07-05", to: "2026-07-12" }).map((t) => t.id)).toEqual(["t2"]);
+    expect(filterTransactions(txns, { search: "funding" }).map((t) => t.id)).toEqual(["t1"]);
+    expect(filterTransactions(txns, {}).map((t) => t.id)).toEqual(["t1", "t2", "t3"]);
+  });
+
+  it("sorts newest first and resolves an unknown accountId to the first account", () => {
+    const accounts = [{ id: "acct-main" }, { id: "acct-2" }];
+    const withOrphan = [...txns, { id: "t4", type: "deposit", amount: 10, date: "2026-07-20", accountId: "gone" }];
+    const sorted = sortedTransactions(withOrphan, accounts);
+    expect(sorted.map((t) => t.id)).toEqual(["t4", "t3", "t2", "t1"]);
+    // The orphaned account id falls back to accounts[0], never dropping the row.
+    expect(sorted.find((t) => t.id === "t4").accountId).toBe("acct-main");
+  });
+
+  it("mergeSettings normalizes the transactions store and defaults it to empty", () => {
+    expect(mergeSettings({}).transactions).toEqual([]);
+    expect(TRANSACTION_TYPES).toEqual(["deposit", "withdrawal"]);
+    const merged = mergeSettings({ transactions: [{ type: "deposit", amount: 100, date: "2026-07-01" }, { type: "bad" }] });
+    expect(merged.transactions).toHaveLength(1);
+    expect(merged.transactions[0]).toMatchObject({ type: "deposit", amount: 100 });
   });
 });
 

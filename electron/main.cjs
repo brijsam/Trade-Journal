@@ -319,8 +319,14 @@ ipcMain.handle("export:savePDF", async (_evt, { defaultName, html }) => {
 ============================================================================ */
 const WINDOW_STATE_FILE = path.join(app.getPath("userData"), "window-state.json");
 const DEFAULT_WINDOW = { width: 1440, height: 900 };
-const MIN_WIDTH = 1080;
-const MIN_HEIGHT = 720;
+/* Floor, not a comfort target. The renderer's CSS is responsive well below
+   desktop widths (the sidebar becomes a drawer under 860px and the tables
+   scroll inside their own containers), so the OS window is allowed to shrink
+   to roughly phone-panel size instead of being pinned at 1080x720 — that pin
+   read as "the window refuses to resize". Still capped by effectiveMinimums()
+   to whatever the current display can actually offer. */
+const MIN_WIDTH = 480;
+const MIN_HEIGHT = 520;
 
 function readWindowState() {
   try {

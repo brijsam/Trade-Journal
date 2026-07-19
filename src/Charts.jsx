@@ -25,6 +25,17 @@ import {
 } from 'recharts';
 import { round, fmtCurrency, fmtPercent, fmtProfitFactor, fmtSignedCurrency, fmtSignedPercent } from './lib/format';
 const CHART_TOOLTIP_STYLE = { background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: "var(--text-primary)" };
+/* Hover cursor for every bar chart: Recharts' default paints a solid grey band
+   over the hovered category column, which reads as a glitched background on
+   the dark themes. Transparent — the tooltip itself is the hover feedback. */
+const BAR_CURSOR = { fill: "transparent" };
+/* Numeric-axis headroom. Bars are drawn from absolute values (nothing below
+   zero) and carry their value label ABOVE the bar top, so the axis reserves
+   ~25% over the tallest mark — a $25 peak puts the axis top around $32 instead
+   of clipping the label against the frame. Shared by the vertical charts' Y
+   axis and the horizontal charts' numeric X axis. */
+const padMax = (dataMax) => (dataMax > 0 ? Math.ceil(dataMax * 1.25) : 1);
+const PAD_DOMAIN = [0, padMax];
 /* Renders a value label on a bar. Bars are always drawn from an absolute value
    so nothing crosses the axis, so the label reads the row's true signed value
    instead — a loss shows "-$50" above a bar that points up. Rows with a zero or
@@ -77,7 +88,7 @@ export function EquityCurveChart({ points }) {
         <defs><linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity={0.35} /><stop offset="100%" stopColor="var(--accent)" stopOpacity={0} /></linearGradient></defs>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="ts" type="number" domain={["dataMin", "dataMax"]} scale="time" tickFormatter={fmtTick} tick={{ fontSize: 10, fill: "var(--text-muted)" }} minTickGap={30} />
-        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => `$${v.toLocaleString()}`} width={70} />
+        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => `$${v.toLocaleString()}`} width={70} padding={{ top: 10, bottom: 6 }} />
         <Tooltip
           contentStyle={CHART_TOOLTIP_STYLE} formatter={(v) => fmtCurrency(v)}
           labelFormatter={(ts, payload) => payload?.[0]?.payload?.date ?? ""}
@@ -95,8 +106,8 @@ export function DailyPnLChart({ data, mode = "amount" }) {
       <BarChart data={displayData} margin={{ top: 22, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--text-muted)" }} minTickGap={20} />
-        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => mode === "percent" ? `${v}%` : `$${v}`} width={60} />
-        <Tooltip content={({ active, payload, label }) => {
+        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => mode === "percent" ? `${v}%` : `$${v}`} width={60} domain={PAD_DOMAIN} />
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }) => {
           if (!active || !payload?.length) return null;
           const p = payload[0]?.payload;
           const val = p?.[valueKey];
@@ -127,8 +138,8 @@ export function MonthlyChart({ data, mode = "amount" }) {
       <BarChart data={displayData} margin={{ top: 22, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="month" tick={{ fontSize: 10, fill: "var(--text-muted)" }} />
-        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => mode === "percent" ? `${v}%` : `$${v}`} width={60} />
-        <Tooltip content={({ active, payload, label }) => {
+        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => mode === "percent" ? `${v}%` : `$${v}`} width={60} domain={PAD_DOMAIN} />
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }) => {
           if (!active || !payload?.length) return null;
           const p = payload[0]?.payload;
           const val = p?.[valueKey];
@@ -196,8 +207,8 @@ export function LongShortChart({ longStats, shortStats }) {
       <BarChart data={data} margin={{ top: 22, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="metric" tick={{ fontSize: 10, fill: "var(--text-muted)" }} />
-        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={40} />
-        <Tooltip content={({ active, payload, label }) => {
+        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={40} domain={PAD_DOMAIN} />
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }) => {
           if (!active || !payload?.length) return null;
           const d = payload[0]?.payload;
           return (
@@ -237,8 +248,8 @@ export function RRDistributionChart({ trades }) {
       <BarChart data={data} margin={{ top: 22, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="bucket" tick={{ fontSize: 10, fill: "var(--text-muted)" }} />
-        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={30} allowDecimals={false} />
-        <Tooltip content={({ active, payload, label }) => {
+        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={30} allowDecimals={false} domain={PAD_DOMAIN} />
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }) => {
           if (!active || !payload?.length) return null;
           const d = payload[0]?.payload;
           return (
@@ -272,8 +283,8 @@ export function HourOfDayChart({ trades }) {
       <BarChart data={data} margin={{ top: 22, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="hour" tick={{ fontSize: 9, fill: "var(--text-muted)" }} interval={2} />
-        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={50} tickFormatter={(v) => fmtCurrency(v)} />
-        <Tooltip content={({ active, payload, label }) => {
+        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={50} tickFormatter={(v) => fmtCurrency(v)} domain={PAD_DOMAIN} />
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }) => {
           if (!active || !payload?.length) return null;
           const d = payload[0]?.payload;
           return (
@@ -309,8 +320,8 @@ export function DayOfWeekChart({ trades }) {
       <BarChart data={data} margin={{ top: 22, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="day" tick={{ fontSize: 10, fill: "var(--text-muted)" }} />
-        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={50} tickFormatter={(v) => fmtCurrency(v)} />
-        <Tooltip content={({ active, payload, label }) => {
+        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={50} tickFormatter={(v) => fmtCurrency(v)} domain={PAD_DOMAIN} />
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }) => {
           if (!active || !payload?.length) return null;
           const d = payload[0]?.payload;
           return (
@@ -347,8 +358,8 @@ export function DurationHistogramChart({ trades }) {
       <BarChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="bucket" tick={{ fontSize: 10, fill: "var(--text-muted)" }} />
-        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={30} allowDecimals={false} />
-        <Tooltip content={({ active, payload, label }) => {
+        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={30} allowDecimals={false} domain={PAD_DOMAIN} />
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }) => {
           if (!active || !payload?.length) return null;
           const d = payload[0]?.payload;
           const total = (d.Wins || 0) + (d.Losses || 0);
@@ -394,9 +405,9 @@ export function AssetPerformanceChart({ trades, mode = "amount" }) {
     <ResponsiveContainer width="100%" height={Math.max(200, data.length * 34)}>
       <BarChart data={data} layout="vertical" margin={{ top: 6, right: 130, left: 8, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" horizontal={false} />
-        <XAxis type="number" tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => mode === "percent" ? `${v}%` : `$${v}`} />
+        <XAxis type="number" tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => mode === "percent" ? `${v}%` : `$${v}`} domain={PAD_DOMAIN} />
         <YAxis type="category" dataKey="symbol" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} width={80} />
-        <Tooltip content={({ active, payload }) => {
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload }) => {
           if (!active || !payload?.length) return null;
           const p = payload[0]?.payload;
           const val = p?.[valueKey];
@@ -443,9 +454,9 @@ export function StrategyPerformanceChart({ trades, mode = "amount" }) {
     <ResponsiveContainer width="100%" height={Math.max(220, data.length * 36)}>
       <BarChart data={data} layout="vertical" margin={{ top: 6, right: 130, left: 8, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" horizontal={false} />
-        <XAxis type="number" tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => mode === "percent" ? `${v}%` : `$${v}`} />
+        <XAxis type="number" tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => mode === "percent" ? `${v}%` : `$${v}`} domain={PAD_DOMAIN} />
         <YAxis type="category" dataKey="strategy" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} width={130} />
-        <Tooltip content={({ active, payload }) => {
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload }) => {
           if (!active || !payload?.length) return null;
           const p = payload[0]?.payload;
           const val = p?.[valueKey];
@@ -475,8 +486,8 @@ export function PerformanceBarChart({ data, labelKey, mode = "amount" }) {
       <BarChart data={displayData} margin={{ top: 22, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey={labelKey} tick={{ fontSize: 10, fill: "var(--text-muted)" }} />
-        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={54} tickFormatter={(v) => mode === "percent" ? `${v}%` : `$${v}`} />
-        <Tooltip content={({ active, payload, label }) => {
+        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={54} tickFormatter={(v) => mode === "percent" ? `${v}%` : `$${v}`} domain={PAD_DOMAIN} />
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }) => {
           if (!active || !payload?.length) return null;
           const p = payload[0]?.payload;
           const val = p?.[valueKey];
@@ -525,9 +536,10 @@ export function MaeMfeChart({ trades }) {
     <ResponsiveContainer width="100%" height={300}>
       <ScatterChart margin={{ top: 10, right: 20, left: 6, bottom: 16 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" />
-        <XAxis type="number" dataKey="mfe" name="MFE" tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => `$${v}`}
+        <XAxis type="number" dataKey="mfe" name="MFE" tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => `$${v}`} domain={PAD_DOMAIN}
           label={{ value: "Max Favorable Excursion ($)", position: "insideBottom", offset: -8, fontSize: 10, fill: "var(--text-muted)" }} />
-        <YAxis type="number" dataKey="pnl" name="P&L" tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={60} tickFormatter={(v) => `$${v}`} />
+        {/* Losses live below zero here, so the floor pads downward too. */}
+        <YAxis type="number" dataKey="pnl" name="P&L" tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={60} tickFormatter={(v) => `$${v}`} domain={[(dataMin) => (dataMin < 0 ? Math.floor(dataMin * 1.25) : 0), padMax]} />
         <ReferenceLine segment={[{ x: 0, y: 0 }, { x: maxAxis, y: maxAxis }]} stroke="var(--accent)" strokeDasharray="4 4" ifOverflow="hidden" />
         <ReferenceLine y={0} stroke="var(--border)" />
         <Tooltip cursor={{ strokeDasharray: "3 3" }} content={({ active, payload }) => {

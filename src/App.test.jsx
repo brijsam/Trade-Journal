@@ -12,8 +12,9 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { TradeForm, TradesTable, JournalPanel, PlaybookPanel } from "./App";
+import { TradeForm, TradesTable, JournalPanel, PlaybookPanel, CashflowPanel, AuthGate } from "./App";
 import { computeTrade, DEFAULT_PREFERENCES, DEFAULT_SETTINGS, fmtDate, parseLocalInputValue } from "./lib/trade";
+import { makeUser } from "./lib/auth";
 
 afterEach(cleanup);
 
@@ -168,6 +169,36 @@ describe("TradesTable — smoke", () => {
     render(<TradesTable {...tableProps([closedTrade("TJ-00001", "BTCUSDT", "110")], { hiddenColumns: ["grade"] })} />);
     expect(screen.queryByText("Grade")).toBeNull();
   });
+
+  // ServiceNow-style inline list edit: a per-cell pencil (and double-click)
+  // commits a metadata change through onBulkEdit without opening the form.
+  it("edits a cell inline through the hover pencil, routing to onBulkEdit", async () => {
+    const user = userEvent.setup();
+    const props = tableProps([closedTrade("TJ-00001", "BTCUSDT", "110")], { onBulkEdit: vi.fn() });
+    render(<TradesTable {...props} />);
+
+    // Grade: click the cell's Edit pencil, pick A from the inline select.
+    await user.click(screen.getByRole("button", { name: /edit grade for tj-00001/i }));
+    await user.selectOptions(screen.getByRole("combobox", { name: /grade for tj-00001/i }), "A");
+    expect(props.onBulkEdit).toHaveBeenCalledWith(["TJ-00001"], { grade: "A" }, "grade set to A");
+  });
+
+  it("commits an inline symbol edit on Enter, upper-cased", async () => {
+    const user = userEvent.setup();
+    const props = tableProps([closedTrade("TJ-00001", "BTCUSDT", "110")], { onBulkEdit: vi.fn() });
+    render(<TradesTable {...props} />);
+
+    await user.click(screen.getByRole("button", { name: /edit symbol for tj-00001/i }));
+    const input = screen.getByDisplayValue("BTCUSDT");
+    await user.clear(input);
+    await user.type(input, "ethusdt{Enter}");
+    expect(props.onBulkEdit).toHaveBeenCalledWith(["TJ-00001"], { symbol: "ETHUSDT" }, "symbol set to ETHUSDT");
+  });
+
+  it("offers no inline editing when onBulkEdit is not wired", () => {
+    render(<TradesTable {...tableProps([closedTrade("TJ-00001", "BTCUSDT", "110")])} />);
+    expect(screen.queryByRole("button", { name: /edit symbol for/i })).toBeNull();
+  });
 });
 
 // The Journal tab and the calendar's day notes edit the same
@@ -191,7 +222,8 @@ describe("JournalPanel — daily journal", () => {
 
   it("shows the empty state with no entries", () => {
     render(<JournalPanel {...journalProps()} />);
-    expect(screen.getByText(/no journal entries yet/i)).toBeTruthy();
+    // Grain-aware empty state (Daily grain is the default).
+    expect(screen.getByText(/no daily entries yet/i)).toBeTruthy();
   });
 
   it("writes a new entry for the prefilled date through the same DayNoteModal the calendar uses", async () => {
@@ -243,7 +275,9 @@ describe("JournalPanel — daily journal", () => {
     render(<JournalPanel {...props} />);
 
     await user.click(screen.getByRole("button", { name: /delete entry for 2026-07-17/i }));
-    expect(await screen.findByText(/delete the note for 2026-07-17/i)).toBeTruthy();
+    // Confirm copy names the day in the grain's display label, not the raw key.
+    const dayLabel = fmtDate(parseLocalInputValue("2026-07-17"));
+    expect(await screen.findByText(new RegExp(`delete the note for ${dayLabel}`, "i"))).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /^delete$/i }));
 
     const updater = props.setPreferences.mock.calls.at(-1)[0];
@@ -263,6 +297,20 @@ describe("JournalPanel — daily journal", () => {
     });
   });
 
+  // The filter row is collapsed until the Filter button opens it — it only
+  // earns its space once asked for.
+  it("keeps the filter row hidden until the Filter button opens it", async () => {
+    const user = userEvent.setup();
+    render(<JournalPanel {...journalProps({ preferences: { ...DEFAULT_PREFERENCES, dayNotes: { "2026-07-17": "Trend day." } } })} />);
+    expect(screen.queryByLabelText(/search notes/i)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /^filter$/i }));
+    expect(screen.getByLabelText(/search notes/i)).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: /^filter$/i }));
+    expect(screen.queryByLabelText(/search notes/i)).toBeNull();
+  });
+
   it("filters the visible entries by note text and offers a clear chip", async () => {
     const user = userEvent.setup();
     render(<JournalPanel {...journalProps({
@@ -270,9 +318,12 @@ describe("JournalPanel — daily journal", () => {
     })} />);
     expect(document.querySelectorAll(".journal-entry")).toHaveLength(2);
 
+    await user.click(screen.getByRole("button", { name: /^filter$/i }));
     await user.type(screen.getByLabelText(/search notes/i), "chop");
     expect(document.querySelectorAll(".journal-entry")).toHaveLength(1);
     expect(screen.getByText(/clear \(1 of 2\)/i)).toBeTruthy();
+    // The toolbar Filter button carries the narrowed count while active.
+    expect(screen.getByRole("button", { name: /filter \(1\/2\)/i })).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: /clear \(1 of 2\)/i }));
     expect(document.querySelectorAll(".journal-entry")).toHaveLength(2);
@@ -281,9 +332,44 @@ describe("JournalPanel — daily journal", () => {
   it("shows a no-match state instead of the empty state when the filter excludes everything", async () => {
     const user = userEvent.setup();
     render(<JournalPanel {...journalProps({ preferences: { ...DEFAULT_PREFERENCES, dayNotes: { "2026-07-17": "Trend day." } } })} />);
+    await user.click(screen.getByRole("button", { name: /^filter$/i }));
     await user.type(screen.getByLabelText(/search notes/i), "nothing matches this");
     expect(screen.getByText(/no entries match this filter/i)).toBeTruthy();
     expect(screen.getByRole("button", { name: /^pdf$/i }).disabled).toBe(true);
+  });
+
+  // The grain switch (Daily/Weekly/Yearly) picks which note store the section
+  // reads and writes — each grain has its own empty state and its own store.
+  it("switches to the weekly grain and writes into weekNotes, not dayNotes", async () => {
+    const user = userEvent.setup();
+    const props = journalProps({ preferences: { ...DEFAULT_PREFERENCES, weekNotes: { "2026-W29": "Trend week." } } });
+    render(<JournalPanel {...props} />);
+
+    // Daily is the default and starts empty.
+    expect(screen.getByText(/no daily entries yet/i)).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: /^weekly$/i }));
+    expect(screen.getByText(/trend week\./i)).toBeTruthy();
+
+    // The add button reads "Write entry" or "Edit entry" depending on whether
+    // the prefilled (current) week already has a note — either way it opens the
+    // weekly DayNoteModal.
+    await user.click(screen.getByRole("button", { name: /^(write|edit) entry$/i }));
+    await user.type(screen.getByPlaceholderText(/how the week went/i), "Week recap.");
+    await user.click(screen.getByRole("button", { name: /save note/i }));
+
+    const updater = props.setPreferences.mock.calls.at(-1)[0];
+    const next = updater(DEFAULT_PREFERENCES);
+    // The write lands on weekNotes (a week-shaped key); dayNotes is untouched.
+    expect(Object.keys(next.weekNotes).some((k) => /^\d{4}-W\d{2}$/.test(k))).toBe(true);
+    expect(next.dayNotes).toEqual(DEFAULT_PREFERENCES.dayNotes);
+  });
+
+  it("shows a grain-specific empty state on the yearly grain", async () => {
+    const user = userEvent.setup();
+    render(<JournalPanel {...journalProps()} />);
+    await user.click(screen.getByRole("button", { name: /^yearly$/i }));
+    expect(screen.getByText(/no yearly entries yet/i)).toBeTruthy();
   });
 });
 
@@ -343,5 +429,107 @@ describe("PlaybookPanel — Strategy Playbook", () => {
     render(<PlaybookPanel {...playbookProps()} />);
     await user.click(screen.getByRole("button", { name: /manage/i }));
     expect(await screen.findByText(/manage strategies/i)).toBeTruthy();
+  });
+});
+
+// The cashflow tab: deposits/withdrawals with a running balance and its own
+// filter. The maths (normalize/net/filter/sort) is proven in lib/trade.test.js;
+// these assert the panel wires them to the user and writes to settings.transactions.
+describe("CashflowPanel — deposits & withdrawals", () => {
+  const accounts = [{ id: "acct-main", name: "Main", startingBalance: 0 }];
+  const cashProps = (overrides = {}) => ({
+    settings: { ...DEFAULT_SETTINGS, transactions: [], accounts },
+    setSettings: vi.fn(),
+    accounts,
+    activeAccountId: "",
+    startingBalance: 0,
+    tradesNet: 0,
+    onToast: vi.fn(),
+    ...overrides,
+  });
+
+  it("shows the empty state with no transactions", () => {
+    render(<CashflowPanel {...cashProps()} />);
+    expect(screen.getByText(/no deposits or withdrawals yet/i)).toBeTruthy();
+  });
+
+  it("records a deposit into settings.transactions with the amount stored positive", async () => {
+    const user = userEvent.setup();
+    const props = cashProps();
+    render(<CashflowPanel {...props} />);
+
+    // Empty state shows two "New Transaction" buttons (toolbar + action); either opens the modal.
+    await user.click(screen.getAllByRole("button", { name: /new transaction/i })[0]);
+    await user.type(screen.getByLabelText(/amount/i), "1500");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    const updater = props.setSettings.mock.calls.at(-1)[0];
+    const next = updater({ ...DEFAULT_SETTINGS, transactions: [] });
+    expect(next.transactions).toHaveLength(1);
+    expect(next.transactions[0]).toMatchObject({ type: "deposit", amount: 1500 });
+  });
+
+  it("lists transactions with a running balance and the true account balance card", () => {
+    render(<CashflowPanel {...cashProps({
+      startingBalance: 0, tradesNet: 200,
+      settings: { ...DEFAULT_SETTINGS, accounts, transactions: [
+        { id: "d1", type: "deposit", amount: 1000, date: "2026-07-01", accountId: "acct-main" },
+        { id: "w1", type: "withdrawal", amount: 300, date: "2026-07-10", accountId: "acct-main" },
+      ] },
+    })} />);
+    // Account Balance = starting 0 + trades 200 + cash (1000 − 300) = 900.
+    expect(screen.getByText("$900.00")).toBeTruthy();
+    // Newest row (withdrawal) leaves a running cash balance of 700.
+    expect(screen.getByText("$700.00")).toBeTruthy();
+  });
+
+  it("filters the list to deposits only, behind the Filter toggle", async () => {
+    const user = userEvent.setup();
+    render(<CashflowPanel {...cashProps({
+      settings: { ...DEFAULT_SETTINGS, accounts, transactions: [
+        { id: "d1", type: "deposit", amount: 1000, date: "2026-07-01", accountId: "acct-main" },
+        { id: "w1", type: "withdrawal", amount: 300, date: "2026-07-10", accountId: "acct-main" },
+      ] },
+    })} />);
+    expect(document.querySelectorAll("tbody tr")).toHaveLength(2);
+
+    await user.click(screen.getByRole("button", { name: /^filter/i }));
+    await user.selectOptions(screen.getByLabelText(/^type$/i), "deposit");
+    expect(document.querySelectorAll("tbody tr")).toHaveLength(1);
+  });
+});
+
+// The login gate. Password hashing is proven in lib/auth.test.js; this asserts
+// the screen verifies against the store and only lets a correct password in.
+describe("AuthGate — login", () => {
+  it("rejects a wrong password and admits the right one", async () => {
+    const user = userEvent.setup();
+    const record = await makeUser("brij", "hunter2");
+    const onAuthenticated = vi.fn();
+    render(<AuthGate users={[record]} journalName="Trade Journal" onAuthenticated={onAuthenticated} />);
+
+    // Single user prefills the username; just enter the password.
+    await user.type(screen.getByPlaceholderText(/your password/i), "wrongpw");
+    await user.click(screen.getByRole("button", { name: /sign in/i }));
+    expect(await screen.findByText(/incorrect password/i)).toBeTruthy();
+    expect(onAuthenticated).not.toHaveBeenCalled();
+
+    await user.clear(screen.getByPlaceholderText(/your password/i));
+    await user.type(screen.getByPlaceholderText(/your password/i), "hunter2");
+    await user.click(screen.getByRole("button", { name: /sign in/i }));
+    await vi.waitFor(() => expect(onAuthenticated).toHaveBeenCalledWith(record));
+  });
+
+  it("rejects an unknown username", async () => {
+    const user = userEvent.setup();
+    const record = await makeUser("brij", "hunter2");
+    const onAuthenticated = vi.fn();
+    render(<AuthGate users={[record, { ...record, id: "u2", username: "other" }]} journalName="TJ" onAuthenticated={onAuthenticated} />);
+
+    await user.type(screen.getByPlaceholderText(/your username/i), "nobody");
+    await user.type(screen.getByPlaceholderText(/your password/i), "whatever");
+    await user.click(screen.getByRole("button", { name: /sign in/i }));
+    expect(await screen.findByText(/no account with that username/i)).toBeTruthy();
+    expect(onAuthenticated).not.toHaveBeenCalled();
   });
 });

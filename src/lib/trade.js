@@ -44,7 +44,7 @@ export const DEFAULT_ACCOUNT_BALANCE = 10000;
 // title, report headers). "" means "use the built-in name" — the default is the
 // empty string rather than the product name so a journal that never set one
 // keeps tracking whatever the build calls itself.
-export const DEFAULT_SETTINGS = { startingBalance: DEFAULT_ACCOUNT_BALANCE, accounts: [{ id: DEFAULT_ACCOUNT_ID, name: "Main Account", broker: "", startingBalance: DEFAULT_ACCOUNT_BALANCE }], profileImage: null, journalName: "", journalTagline: "", timezone: "", strategyNotes: {}, goals: DEFAULT_GOALS, checklistRules: DEFAULT_CHECKLIST_RULES };
+export const DEFAULT_SETTINGS = { startingBalance: DEFAULT_ACCOUNT_BALANCE, accounts: [{ id: DEFAULT_ACCOUNT_ID, name: "Main Account", broker: "", startingBalance: DEFAULT_ACCOUNT_BALANCE }], profileImage: null, journalName: "", journalTagline: "", timezone: "", strategyNotes: {}, transactions: [], goals: DEFAULT_GOALS, checklistRules: DEFAULT_CHECKLIST_RULES };
 export const DEFAULT_FILTERS = { status: "", datePreset: "", dateFrom: "", dateTo: "", asset: "", marketType: "", direction: "", strategy: "", result: "", rrMin: "", rrMax: "", search: "", tag: "" };
 export const DEFAULT_CALENDAR = { view: "monthly", cursor: "", dateFrom: "", dateTo: "" };
 // Window size/position now live with the desktop shell (electron/main.cjs
@@ -62,14 +62,26 @@ export const DEFAULT_CALENDAR = { view: "monthly", cursor: "", dateFrom: "", dat
 // every tab switch, so component state alone forgets both.
 export const PAGE_SIZES = [25, 50, 100];
 export const DEFAULT_TABLE_SORT = { key: "entryDateTime", dir: "desc" };
-export const DEFAULT_PREFERENCES = { filters: DEFAULT_FILTERS, calendar: DEFAULT_CALENDAR, selectedTab: "dashboard", calendarView: "monthly", calendarCursor: "", dashboardLayout: "standard", dayNotes: {}, chartMode: "amount", sidebarCollapsed: false, activeAccountId: "", zoom: 1, density: "comfortable", hiddenColumns: [], accent: "", tableSort: DEFAULT_TABLE_SORT, pageSize: 50, clockFormat: "12h", weeklyChartCount: 5, monthlyChartCount: 5 };
+export const DEFAULT_PREFERENCES = { filters: DEFAULT_FILTERS, calendar: DEFAULT_CALENDAR, selectedTab: "dashboard", calendarView: "monthly", calendarCursor: "", dashboardLayout: "standard", dayNotes: {}, weekNotes: {}, yearNotes: {}, chartMode: "amount", sidebarCollapsed: false, activeAccountId: "", zoom: 1, density: "comfortable", hiddenColumns: [], accent: "", tableSort: DEFAULT_TABLE_SORT, pageSize: 50, clockFormat: "12h", weeklyChartCount: 5, monthlyChartCount: 5, yearlyChartCount: 5, rrChartCount: 5, hourChartCount: 5, durationChartCount: 5 };
 
-// The Analytics weekly/monthly charts show only the most recent N periods
-// (0 = all). The ladder the pickers offer; anything stored outside it falls
-// back to the 5-period default so a hand-edited value can't blank a chart.
+// The Analytics period charts (weekly/monthly/yearly) window to the most recent
+// N periods; the trade-based charts (RR distribution, hour-of-day, duration)
+// window to the most recent N *closed trades*. Same ladder, same picker, same
+// 0 = all — anything stored outside the ladder falls back to the 5 default so a
+// hand-edited value can't blank a chart.
 export const CHART_PERIOD_CHOICES = [3, 5, 8, 12, 0];
 export function normalizeChartCount(value) {
   return CHART_PERIOD_CHOICES.includes(value) ? value : 5;
+}
+/* The most recent `count` trades by exit time, for the trade-based analytics
+   charts' window. count 0 (or absent) = all. Trades without an exit time sort
+   last (they're open, not "recent"); the input is never mutated. */
+export function mostRecentTrades(trades, count) {
+  const list = Array.isArray(trades) ? trades : [];
+  if (!count) return list;
+  return [...list]
+    .sort((a, b) => String(b?.exitDateTime || "").localeCompare(String(a?.exitDateTime || "")))
+    .slice(0, count);
 }
 
 // A stored accent is only ever a six-digit hex colour or "the theme's own".
@@ -115,6 +127,9 @@ export const SHARD_COUNT = 24;
 export const META_KEY = "brij-tj-meta-v1";
 export const SHARD_PREFIX = "brij-tj-shard-";
 export const SHOTS_PREFIX = "brij-tj-shots-";
+// The login gate's user records live in their own key, deliberately outside the
+// meta blob: password hashes must never ride along in a journal backup export.
+export const AUTH_KEY = "brij-tj-auth-v1";
 export const shardKey = (n) => `${SHARD_PREFIX}${n}`;
 export function djb2(str) {
   let h = 5381;
@@ -260,13 +275,19 @@ export function zonedNow(tz, at = new Date()) {
   const get = (type) => Number(parts.find((p) => p.type === type)?.value ?? 0);
   return new Date(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
 }
-// "GMT+5:30" / "GMT-4" for a zone's offset at `at` — DST means the answer for
-// one zone changes through the year, which is why this reads a live instant
-// instead of a lookup table. Derived from zonedNow so the two can't disagree.
-export function tzOffsetLabel(tz, at = new Date()) {
-  if (!isValidTimeZone(tz)) return "";
+// A zone's UTC offset in minutes at `at` — DST means the answer for one zone
+// changes through the year, which is why this reads a live instant instead of
+// a lookup table. Derived from zonedNow so the two can't disagree. NaN for an
+// unknown zone id, so callers can tell "UTC" from "invalid".
+export function tzOffsetMinutes(tz, at = new Date()) {
+  if (!isValidTimeZone(tz)) return NaN;
   const utcNaive = new Date(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate(), at.getUTCHours(), at.getUTCMinutes(), at.getUTCSeconds());
-  const mins = Math.round((zonedNow(tz, at) - utcNaive) / 60000);
+  return Math.round((zonedNow(tz, at) - utcNaive) / 60000);
+}
+// "GMT+5:30" / "GMT-4" — the display form of the offset above.
+export function tzOffsetLabel(tz, at = new Date()) {
+  const mins = tzOffsetMinutes(tz, at);
+  if (Number.isNaN(mins)) return "";
   const abs = Math.abs(mins);
   const rem = abs % 60;
   return `GMT${mins < 0 ? "-" : "+"}${Math.floor(abs / 60)}${rem ? `:${pad(rem)}` : ""}`;
@@ -309,6 +330,65 @@ export function normalizeStrategyNotes(notes) {
   }
   return out;
 }
+/* ---- Cashflow (deposits & withdrawals) -----------------------------------
+   Money moving in or out of an account, independent of trade P&L: a deposit
+   adds to the balance, a withdrawal subtracts. Each transaction belongs to an
+   account like a trade does, and an unknown accountId resolves to the first
+   account at read time, so deleting an account never orphans its cash history.
+   The amount is always stored positive — the sign lives in `type` — so a
+   hand-edited "-50" deposit can't quietly become a withdrawal. Blank or
+   non-positive amounts drop, the same way a blank journal note does. */
+export const TRANSACTION_TYPES = ["deposit", "withdrawal"];
+export function normalizeTransactions(transactions) {
+  return (Array.isArray(transactions) ? transactions : [])
+    .filter((t) => t && typeof t === "object" && TRANSACTION_TYPES.includes(t.type))
+    .map((t) => ({
+      id: t.id || uid("TXN"),
+      type: t.type,
+      amount: Math.abs(num(t.amount, 0)) || 0,
+      // A day key ("YYYY-MM-DD") or a datetime-local string; kept verbatim, the
+      // way trade times are, and compared on its first ten chars for filtering.
+      date: typeof t.date === "string" ? t.date : "",
+      accountId: t.accountId || "",
+      note: typeof t.note === "string" ? t.note.slice(0, 500) : "",
+    }))
+    .filter((t) => t.amount > 0);
+}
+// Net cash moved by a set of transactions: deposits add, withdrawals subtract.
+export function transactionsNet(transactions) {
+  return (Array.isArray(transactions) ? transactions : []).reduce(
+    (sum, t) => sum + (t.type === "withdrawal" ? -1 : 1) * (Math.abs(num(t.amount, 0)) || 0),
+    0
+  );
+}
+/* The Cashflow tab's own filter — applied to the list AND its running-balance
+   column, so what's on screen is exactly what the numbers sum. Self-contained
+   to this tab (the request was explicit that it touches nothing else): date
+   range (inclusive, day-compared like the journal filter), type, and note text.
+   Mirrors filterJournalEntries. */
+export function filterTransactions(transactions, filter = {}) {
+  const { from = "", to = "", type = "", search = "" } = filter;
+  const needle = search.trim().toLowerCase();
+  return (Array.isArray(transactions) ? transactions : []).filter((t) => {
+    if (type && t.type !== type) return false;
+    const day = (t.date || "").slice(0, 10);
+    if (from && day < from) return false;
+    if (to && day > to) return false;
+    if (needle && !(t.note || "").toLowerCase().includes(needle)) return false;
+    return true;
+  });
+}
+// Transactions newest first, with each account-unknown id resolved to the first
+// account the way trades resolve — so a deleted account's cash still shows in
+// the pooled view rather than vanishing. accounts[0] is the documented fallback.
+export function sortedTransactions(transactions, accounts) {
+  const ids = new Set((accounts || []).map((a) => a.id));
+  const fallback = accounts?.[0]?.id || DEFAULT_ACCOUNT_ID;
+  return normalizeTransactions(transactions)
+    .map((t) => ({ ...t, accountId: ids.has(t.accountId) ? t.accountId : fallback }))
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+}
+
 export function mergeSettings(settings) {
   const s = settings || {};
   const accounts = normalizeAccounts(s.accounts, s.startingBalance);
@@ -324,6 +404,7 @@ export function mergeSettings(settings) {
     // journal restored on a runtime with an older tz database still loads.
     timezone: normalizeTimezone(s.timezone),
     strategyNotes: normalizeStrategyNotes(s.strategyNotes),
+    transactions: normalizeTransactions(s.transactions),
     goals: { ...DEFAULT_GOALS, ...(s.goals || {}) },
     checklistRules: s.checklistRules?.length ? s.checklistRules : DEFAULT_CHECKLIST_RULES,
   };
@@ -336,11 +417,17 @@ export function mergePreferences(preferences) {
     filters: { ...DEFAULT_FILTERS, ...(prefs.filters || {}) },
     calendar: { ...DEFAULT_CALENDAR, ...(prefs.calendar || {}), view: prefs.calendar?.view || prefs.calendarView || DEFAULT_CALENDAR.view, cursor: prefs.calendar?.cursor || prefs.calendarCursor || "" },
     dayNotes: prefs.dayNotes || {},
+    weekNotes: prefs.weekNotes || {},
+    yearNotes: prefs.yearNotes || {},
     zoom: clampZoom(prefs.zoom ?? 1),
     density: prefs.density === "compact" ? "compact" : "comfortable",
     clockFormat: prefs.clockFormat === "24h" ? "24h" : "12h",
     weeklyChartCount: normalizeChartCount(prefs.weeklyChartCount),
     monthlyChartCount: normalizeChartCount(prefs.monthlyChartCount),
+    yearlyChartCount: normalizeChartCount(prefs.yearlyChartCount),
+    rrChartCount: normalizeChartCount(prefs.rrChartCount),
+    hourChartCount: normalizeChartCount(prefs.hourChartCount),
+    durationChartCount: normalizeChartCount(prefs.durationChartCount),
     hiddenColumns: Array.isArray(prefs.hiddenColumns) ? prefs.hiddenColumns.filter((k) => typeof k === "string") : [],
     accent: normalizeAccent(prefs.accent),
     // Guaranteed shapes, whatever was stored: a junk sort key still sorts (the
@@ -621,14 +708,20 @@ export function escapeHtml(value) {
 
 // One CSV field: quote when it contains a comma, quote, or newline, and double
 // up embedded quotes — the same escaping parseCSV() reads back.
-/* ---- Daily journal export ------------------------------------------------
-   The journal's day notes (preferences.dayNotes, keyed by isoDate day key —
-   the same store the calendar edits). Entries come out newest first; blank
-   notes and keys that aren't day keys (the pre-fix UTC stragglers documented
-   in ARCHITECTURE.md § Dates are still day-shaped and survive) are dropped. */
-export function journalEntries(dayNotes) {
-  return Object.entries(dayNotes || {})
-    .filter(([key, text]) => /^\d{4}-\d{2}-\d{2}$/.test(key) && typeof text === "string" && text.trim())
+/* ---- Journal export -------------------------------------------------------
+   The journal has three note stores, one per grain: preferences.dayNotes
+   (keyed by isoDate — the same store the calendar edits), preferences.weekNotes
+   (isoWeekKey, `2026-W29`), preferences.yearNotes (`2026`). Each has its own
+   tab section and its own filter. `journalEntries` reads any of them: the
+   `kind` picks the key shape it keeps, so a blank note or a mis-shaped key
+   (the pre-fix UTC day-key stragglers in ARCHITECTURE.md § Dates are still
+   day-shaped and survive) is dropped. All three formats are zero-padded and
+   sort lexically into chronological order, so entries come out newest first. */
+export const JOURNAL_KEY_PATTERNS = { day: /^\d{4}-\d{2}-\d{2}$/, week: /^\d{4}-W\d{2}$/, year: /^\d{4}$/ };
+export function journalEntries(notes, kind = "day") {
+  const pat = JOURNAL_KEY_PATTERNS[kind] || JOURNAL_KEY_PATTERNS.day;
+  return Object.entries(notes || {})
+    .filter(([key, text]) => pat.test(key) && typeof text === "string" && text.trim())
     .sort((a, b) => (a[0] < b[0] ? 1 : -1));
 }
 /* The Journal tab's filter, applied to the list AND every export so what you

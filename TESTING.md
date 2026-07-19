@@ -21,7 +21,7 @@ Another: React reverts a controlled input's DOM value back to its (unchanged) `v
 ## Expected result
 
 ```
-Tests  209 passed (209)
+Tests  242 passed (242)
 ```
 
 **A fully green run is the expected state.** No `BUG:`-tagged tests are outstanding — the last one (the CSV fee round trip) went green when the defect was fixed and lost its tag. Any failure is a real regression.
@@ -48,14 +48,17 @@ The `BUG:` convention stays: a test tagged `BUG:` asserts what the code *should*
 | Form | `tradeToForm` repairs, `withDerivedFills` mirroring, `formSignature` dirty-checking |
 | Dates | duration, ISO week/month keys, ranges, presets |
 | Day keys | `isoDate` answers the **local** day — early-morning trades, local midnight, calendar cell keys, preset boundaries |
-| Journal timezone | `zonedNow` reads another zone's wall clock (EST and EDT), lands "today" on the journal zone's day when it differs from the machine's, `""`/unknown ids fall back to the machine, `mergeSettings` defaults pre-timezone journals to `""` and drops invalid ids; `tzOffsetLabel` tracks DST and half-hour offsets |
-| Daily journal | `journalEntries` orders newest first and drops blanks/non-day keys; markdown headings carry the day's trade count and P&L; a multi-line note round-trips through CSV quoting; `filterJournalEntries` narrows by inclusive day range and case-insensitive text, and the exporters emit exactly the filtered set; `journalToHtml` escapes note free text and splits Word (Office namespaces) from PDF (`@page`) variants |
+| Journal timezone | `zonedNow` reads another zone's wall clock (EST and EDT), lands "today" on the journal zone's day when it differs from the machine's, `""`/unknown ids fall back to the machine, `mergeSettings` defaults pre-timezone journals to `""` and drops invalid ids; `tzOffsetLabel` tracks DST and half-hour offsets; `tzOffsetMinutes` exposes the raw offset (the Settings picker sorts by it, west→east) and is `NaN` for junk |
+| Journal (grains) | `journalEntries` orders newest first and drops blanks; **`kind`** keeps only its key shape (day/week/year), so a week note never leaks into the daily list and vice versa; markdown headings carry the period's trade count and P&L; a multi-line note round-trips through CSV quoting; `filterJournalEntries` narrows by inclusive range and case-insensitive text, and the exporters emit exactly the filtered set; `journalToHtml` escapes note free text and splits Word (Office namespaces) from PDF (`@page`) variants |
 | Strategy playbook | `strategyNotes` normalized to a map of non-blank strings, junk shapes to `{}`, notes length-capped |
-| Chart windows | `weeklyChartCount`/`monthlyChartCount` constrained to the picker ladder (`CHART_PERIOD_CHOICES`, 0 = all), off-ladder values fall back to the 5-period default |
+| Chart windows | `weeklyChartCount`/`monthlyChartCount`/`yearlyChartCount` and the trade-based `rrChartCount`/`hourChartCount`/`durationChartCount` constrained to the picker ladder (`CHART_PERIOD_CHOICES`, 0 = all), off-ladder values fall back to 5; `mostRecentTrades` returns the newest N by exit time (open trades last), the whole list unmutated when N is 0 |
+| Cashflow | `normalizeTransactions` stores amounts positive and drops non-positive/unknown-type/junk rows; `transactionsNet` sums deposits up and withdrawals down; `filterTransactions` narrows by type/date range/note only; `sortedTransactions` orders newest first and resolves an orphaned `accountId` to `accounts[0]`; `mergeSettings` defaults the store to `[]` |
 | Clock format | `clockFormat` constrained to `12h`/`24h`, `12h` the legacy default |
 | Trade ids | high-water counter: a deleted trade's number is never reissued, the counter can't fall behind the journal |
 
-The React shell (`App.jsx`), the charts and the Electron layer have no automated tests. Verify those by driving the app.
+`src/lib/auth.test.js` covers the login gate's pure logic (jsdom-free, on Node's Web Crypto): `hashPassword` never stores plaintext and is deterministic for a fixed salt but salted per call otherwise, `verifyPassword` admits the right password and rejects the wrong one, `normalizeUsers` drops records missing a username or hash, `findUser` matches case-insensitively, `makeUser` rejects blanks.
+
+The component smoke tests in `App.test.jsx` add the cashflow tab (records a deposit into `settings.transactions`, running balance + account-balance card, filter behind the toggle), the login gate (`AuthGate` rejects a wrong password / unknown username, admits the right one) and the trades table's ServiceNow-style inline edit (the grade cell's pencil commits `{grade}` through `onBulkEdit`, a symbol edit commits upper-cased on Enter, and no pencil renders when `onBulkEdit` is absent). The React shell's remaining wiring, the charts and the Electron layer have no automated tests — verify those by driving the app.
 
 ## The suite is pinned to `TZ=Asia/Kolkata`
 
