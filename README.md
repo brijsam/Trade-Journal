@@ -65,7 +65,7 @@ In the browser build the same data sits in IndexedDB under `brij-trade-journal`.
 npm test
 ```
 
-Expected: **`146 passed (146)`** — fully green.
+Expected: **`242 passed (242)`** — fully green.
 
 When a live defect is on the books it is pinned by a red test tagged `BUG:` that asserts what the app *should* do; [KNOWN_ISSUES.md](KNOWN_ISSUES.md) and [TESTING.md](TESTING.md) then carry the expected failure count. None are outstanding right now, so any failure is a genuine regression.
 

@@ -19,8 +19,10 @@ src/
   App.jsx         the React shell — CSS, tokens, panels, modals, root state
   Charts.jsx      every Recharts component (lazy-loaded chunk)
   lib/
-    trade.js      THE RULES — maths, stats, dates, sharding, CSV, normalization
+    trade.js      THE RULES — maths, stats, dates, sharding, CSV, cashflow, normalization
     trade.test.js the feature suite
+    auth.js       login-gate logic — PBKDF2 hashing (Web Crypto), user records
+    auth.test.js  the auth suite
     format.js     display formatting
     storage.js    backend switch
 electron/
