@@ -55,7 +55,7 @@ swallow it silently). Add a test: render a component that throws inside
 
 ---
 
-## ⬜ Batch #2 — LICENSE
+## ✅ Batch #2 — LICENSE (2026-07-22)
 
 **Why:** the app ships as a signed ~108MB Windows installer with **no
 license file and no `license` field in package.json** — legally undefined

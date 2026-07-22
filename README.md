@@ -87,3 +87,7 @@ The suite is pinned to `TZ=Asia/Kolkata` on purpose. See [TESTING.md](TESTING.md
 React 19 · Vite 8 · Recharts · Electron 43 · electron-builder · vitest. No CSS framework — themes are CSS custom properties injected per theme.
 
 New rules belong in `src/lib/trade.js` with a test. `src/App.jsx` is the React shell; anything pure that lands there can't be tested.
+
+## License
+
+All rights reserved — see [LICENSE](LICENSE). Not open-source; no permission is granted to use, copy, modify or redistribute this software without the copyright holder's written consent.

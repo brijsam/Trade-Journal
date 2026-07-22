@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Trade Journal — local-first trading performance analytics for crypto, forex, commodities, stocks and futures.",
   "author": "Brij",
+  "license": "UNLICENSED",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
