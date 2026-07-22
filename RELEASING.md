@@ -10,6 +10,16 @@ Distribution is a **manual download** of an NSIS installer built on this machine
 4. Bump `version` in `package.json`. **That is the only field a release touches.**
 5. `npm run dist` → `release/Trade Journal Setup <version>.exe` (releases before 3.3 shipped as `Brij Trade Journal Setup <version>.exe` — same app, `productName` was rebranded).
 6. Install the built exe and confirm an existing journal still loads.
+7. Add a [CHANGELOG.md](CHANGELOG.md) entry for the new version (Keep a
+   Changelog format), then tag the release commit and push the tag:
+   ```bash
+   git tag -a vX.Y.Z -m "chore: bump version to X.Y.Z"
+   git push origin vX.Y.Z
+   ```
+   Create a matching GitHub Release from that tag (`gh release create vX.Y.Z`
+   or the UI), optionally attaching the built `.exe`. Tag the commit that
+   actually bumped `version` in `package.json` — never rewrite a tag that's
+   already been pushed.
 
 ## Rules that must not be broken
 
