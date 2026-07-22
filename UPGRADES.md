@@ -109,7 +109,7 @@ Don't weaken production code just to make it easier to test.
 
 ---
 
-## ⬜ Batch #4 — TypeScript (biggest effort — do LAST)
+## 🟨 Batch #4 — TypeScript (biggest effort — do LAST) — lib done, App.jsx deferred (2026-07-22)
 
 **Why:** zero static type safety over a ~5.2k-line `App.jsx` and a
 ~1.1k-line `lib/trade.js`. Highest-leverage improvement for a codebase this
@@ -124,17 +124,40 @@ pick one and note the choice here:
       keeping it `.jsx` with JSDoc types.
 Add `tsc --noEmit` as a lint/CI step either way.
 
-**Files:** `tsconfig.json` (new), `src/lib/*`, `vite.config.js`,
-`eslint.config.js`, `.github/workflows/ci.yml`.
+**Choice made: (b).** `git mv`'d `lib/format.js`, `lib/auth.js`, `lib/trade.js`
+to `.ts` (history preserved) and typed them for real — domain types (`Trade`,
+`ComputedTrade`, `Settings`, `Preferences`, `Account`, `Transaction`,
+`AuthUser`, …) live at the top of `trade.ts`/`auth.ts`. `strict: true`.
+Boundary functions that coerce "whatever's on disk" (`mergeSettings`,
+`normalizeAccounts`, `normalizeUsers`, `rowsToTrades`, `computeTrade`'s
+input, …) take `unknown` on purpose — that's their actual job — rather than
+being forced into the domain types they produce. No import-path edits were
+needed anywhere: imports in this codebase are already extension-less.
+`App.jsx`/`Charts.jsx` **stay `.jsx` for now** (`allowJs: true, checkJs:
+false` includes them in the program un-checked) — a future session picks
+between JSDoc-typing them in place or a `.tsx` migration; either way
+`src/vite-env.d.ts` (added this session) already has the ambient
+`__APP_VERSION__` declaration both paths need.
 
-**Accept:** `tsc --noEmit` clean, all tests still pass, no runtime
-behavior change (this is a types-only pass, not a refactor).
+**Files:** `tsconfig.json` (new), `src/vite-env.d.ts` (new),
+`src/lib/format.ts`/`auth.ts`/`trade.ts` (renamed from `.js`, typed),
+`eslint.config.js` (added `typescript-eslint`, extended the one-way-import
+rule to `lib/**/*.ts`), `package.json` (added `typescript` +
+`typescript-eslint` devDeps, `lint` now chains `tsc --noEmit`, new
+`typecheck` script), `.github/workflows/ci.yml` (comment only — `npm run
+lint` already carries `tsc` through the existing lint step).
+
+**Accept:** `tsc --noEmit` clean, all tests still pass (248/248), no runtime
+behavior change — verified `npm run build` still code-splits `Charts.jsx`
+into its own chunk, and the dev server renders/behaves identically in the
+browser. This is a types-only pass, not a refactor.
 
 **Gotcha:** don't break the one-way import rule or the lazy `Charts.jsx`
 code-split boundary. `__APP_VERSION__` is a Vite-injected global (declared
-in eslint.config.js) — it needs an ambient `.d.ts` declaration under
-option (a)/(b). This batch is large enough to reasonably split across
-more than one session — lib first, App.jsx later.
+in eslint.config.js **and** now `src/vite-env.d.ts` for `tsc`) — it needs an
+ambient `.d.ts` declaration under option (a)/(b). This batch is large enough
+to reasonably split across more than one session — lib first (done),
+App.jsx later (not started).
 
 ---
 

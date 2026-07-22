@@ -2,6 +2,7 @@ import js from '@eslint/js'
 import globals from 'globals'
 import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
+import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
@@ -21,6 +22,15 @@ export default defineConfig([
     },
   },
   {
+    // lib/*.ts (batch #4's TypeScript migration — see CLAUDE.md § Type safety):
+    // type-aware checking itself is tsc's job (`npm run typecheck`), so this
+    // stays on typescript-eslint's non-type-checked recommended set, just to
+    // catch the same style/correctness issues the .js side gets.
+    files: ['**/*.ts'],
+    extends: [...tseslint.configs.recommended],
+    languageOptions: { globals: globals.browser },
+  },
+  {
     // Build-time config runs under Node, not the browser — `process` etc.
     files: ['vite.config.js'],
     languageOptions: { globals: globals.node },
@@ -30,7 +40,7 @@ export default defineConfig([
     // The reverse is circular AND drags the whole app into the lazily-loaded
     // chart chunk, undoing the ~300kB code split (see ARCHITECTURE.md). This
     // was convention enforced by comments; now the linter holds the line.
-    files: ['src/lib/**/*.{js,jsx}', 'src/Charts.jsx'],
+    files: ['src/lib/**/*.{js,jsx,ts}', 'src/Charts.jsx'],
     rules: {
       'no-restricted-imports': ['error', {
         patterns: [{

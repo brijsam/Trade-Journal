@@ -31,7 +31,7 @@ The `BUG:` convention stays: a test tagged `BUG:` asserts what the code *should*
 
 ## What is covered
 
-`src/lib/trade.test.js` covers `src/lib/trade.js` — the journal's rules — feature by feature:
+`src/lib/trade.test.js` covers `src/lib/trade.ts` — the journal's rules — feature by feature:
 
 | Area | What is pinned |
 |---|---|
@@ -74,7 +74,7 @@ The bugs are fixed; **keep the pin**. It is now the only thing standing between 
 
 ## Conventions
 
-- **New rules go in `lib/trade.js` with a test.** Not in App.jsx. If logic is pure, it belongs where it can be tested.
+- **New rules go in `lib/trade.ts` with a test.** Not in App.jsx. If logic is pure, it belongs where it can be tested.
 - **Test names read as claims about the product**, not about the function ("realises P&L only on the size that both entered and left", not "computeTrade returns _qty"). A failure should tell you what broke for the trader.
 - **Tests named for a legacy fallback are load-bearance checks.** If "folds a pre-accounts journal into one account…" goes red, a real 2.x journal on disk just stopped loading. Do not delete it to get green.
 - **Comment the arithmetic** where an expected value isn't self-evident (`expect(t.pnlPercent).toBe(10); // 20 / (100 * 2) * 100`).

@@ -20,7 +20,8 @@ npm run electron:dev   # desktop shell — data in real files, native Save As
 | `npm run electron:dev` | dev server + Electron shell |
 | `npm run build` | production web build → `dist/` |
 | `npm run dist` | build + package the Windows installer → `release/*.exe` |
-| `npm run lint` | eslint |
+| `npm run lint` | eslint + `tsc --noEmit` |
+| `npm run typecheck` | `tsc --noEmit` alone |
 | `npm test` | vitest — fully green expected, see below |
 | `npm run test:watch` | vitest, re-running on save |
 
@@ -84,9 +85,9 @@ The suite is pinned to `TZ=Asia/Kolkata` on purpose. See [TESTING.md](TESTING.md
 
 ## Stack
 
-React 19 · Vite 8 · Recharts · Electron 43 · electron-builder · vitest. No CSS framework — themes are CSS custom properties injected per theme.
+React 19 · Vite 8 · Recharts · Electron 43 · electron-builder · vitest · TypeScript (`src/lib/*`, incremental — see CLAUDE.md § Type safety). No CSS framework — themes are CSS custom properties injected per theme.
 
-New rules belong in `src/lib/trade.js` with a test. `src/App.jsx` is the React shell; anything pure that lands there can't be tested.
+New rules belong in `src/lib/trade.ts` with a test. `src/App.jsx` is the React shell; anything pure that lands there can't be tested.
 
 ## License
 

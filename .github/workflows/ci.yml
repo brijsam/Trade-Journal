@@ -19,6 +19,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # eslint, then `tsc --noEmit` over src/lib/*.ts (batch #4's incremental
+      # TypeScript migration — see CLAUDE.md § Type safety) — both chained
+      # into the one lint script rather than a separate step.
       - run: npm run lint
       # npm test already pins TZ=Asia/Kolkata via the package.json script —
       # that pin is load-bearing (TESTING.md): on a UTC runner the historical

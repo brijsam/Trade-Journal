@@ -32,7 +32,7 @@ electron/
 
 **Import direction is one-way: `App.jsx` → `lib/*`.** `Charts.jsx`, `format.js` and `trade.js` must never import `App.jsx`. It is circular, and it would pull the whole app into the lazily-loaded chart chunk, undoing the ~300kB code split that is the only reason `Charts.jsx` exists as a separate file. The linter enforces this: a `no-restricted-imports` block in `eslint.config.js` scoped to `src/lib/**` and `src/Charts.jsx` fails the build on any import of App.
 
-Practical rule: **pure logic goes in `lib/trade.js` with a test. Anything touching `window`, `document` or `storage` stays in `App.jsx`.**
+Practical rule: **pure logic goes in `lib/trade.ts` with a test. Anything touching `window`, `document` or `storage` stays in `App.jsx`.**
 
 ## Storage
 
@@ -177,7 +177,7 @@ Because the key ignores time-of-day, a day is bounded by its local midnight and 
 
 ### The journal timezone
 
-`settings.timezone` (an IANA id; `""` = follow the machine, the default and the pre-v3.2 behaviour) moves **only "now"**: the dashboard's Today/This Week/This Month keys, `dateRangeForPreset`'s presets, the calendar's today highlight, the topbar clock, the date picker's prefill and Now button, and export file stamps. `zonedNow(tz, at)` in `lib/trade.js` is the single bridge — it reads `at`'s wall clock in `tz` via `Intl.DateTimeFormat` and returns it as a naive local-parts Date, so `isoDate`, the presets and the picker keep working unchanged on what it returns.
+`settings.timezone` (an IANA id; `""` = follow the machine, the default and the pre-v3.2 behaviour) moves **only "now"**: the dashboard's Today/This Week/This Month keys, `dateRangeForPreset`'s presets, the calendar's today highlight, the topbar clock, the date picker's prefill and Now button, and export file stamps. `zonedNow(tz, at)` in `lib/trade.ts` is the single bridge — it reads `at`'s wall clock in `tz` via `Intl.DateTimeFormat` and returns it as a naive local-parts Date, so `isoDate`, the presets and the picker keep working unchanged on what it returns.
 
 > Stored trade times are naive wall-clock strings and are **never shifted** — what the user typed is what every zone shows. That asymmetry is the design: a trader journalling the New York session types NY times, and the setting makes "today" agree with those times instead of the machine's clock. Changing the zone must never rewrite or re-bucket an existing trade; there is deliberately no conversion step anywhere.
 
@@ -211,7 +211,7 @@ The **Cashflow tab** owns a session-only filter (`filterTransactions`: type / in
 
 ## Authentication
 
-An **opt-in, soft** login gate. `lib/auth.js` is pure (PBKDF2-SHA-256 on `globalThis.crypto.subtle` — present in the browser, the Electron renderer and Node's test runtime): it hashes passwords, and normalizes/looks up user records. No password is ever stored — only a per-user random salt and the derived hash. The store lives in its **own** key `AUTH_KEY` (`brij-tj-auth-v1`), deliberately **outside** the meta blob, so password hashes never ride along in a journal backup export.
+An **opt-in, soft** login gate. `lib/auth.ts` is pure (PBKDF2-SHA-256 on `globalThis.crypto.subtle` — present in the browser, the Electron renderer and Node's test runtime): it hashes passwords, and normalizes/looks up user records. No password is ever stored — only a per-user random salt and the derived hash. The store lives in its **own** key `AUTH_KEY` (`brij-tj-auth-v1`), deliberately **outside** the meta blob, so password hashes never ride along in a journal backup export.
 
 - **Zero users = no gate.** Existing journals keep opening straight to the app; nothing forces a password on anyone.
 - **Turning it on.** Creating the first account (Settings > Security) writes the first user and signs the creator in, so they aren't bounced to the login screen mid-session. From then on a fresh launch shows `AuthGate`.
@@ -235,7 +235,7 @@ Tab switches run through `withTabTransition`, which uses the View Transitions AP
 
 The freeze itself is `useBodyScrollLock()` — one module-level reference count shared by every `Modal` instance and `CommandPalette`, not each locking and restoring independently. The palette is deliberately allowed to open *on top of* a modal (Ctrl/Cmd+K works from inside a dialog), so two lockers being alive at once is normal; only the count reaching 0 touches the DOM, so whichever order they close in, the body ends up correctly unlocked. Two independent locks used to do this — closing the modal before the palette that opened on top of it left the body at `overflow: hidden` forever, with nothing left open to blame. See [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
-**Command palette** — Ctrl/Cmd+K. Actions (new trade, tab jumps, sidebar, shortcuts, the 12 themes) plus a live trade search over the whole journal (id / symbol / direction / status / market / strategy / tags / account — global on purpose, not scoped to the account in view). Matching and ranking are `paletteFilter()` in `lib/trade.js` — pure, token-AND, word-start-over-mid-word — pinned by tests; the component in App.jsx is just the shell. With no query only the leading actions show, so the idle list stays short.
+**Command palette** — Ctrl/Cmd+K. Actions (new trade, tab jumps, sidebar, shortcuts, the 12 themes) plus a live trade search over the whole journal (id / symbol / direction / status / market / strategy / tags / account — global on purpose, not scoped to the account in view). Matching and ranking are `paletteFilter()` in `lib/trade.ts` — pure, token-AND, word-start-over-mid-word — pinned by tests; the component in App.jsx is just the shell. With no query only the leading actions show, so the idle list stays short.
 
 **Trades table — ServiceNow-style inline list edit.** Hovering a row reveals a pencil in each editable cell (double-click the cell works too); it turns that one cell into an input/select, and Enter (text) or picking an option (select) commits. The editable set is the **metadata** columns only — Symbol, Market, Direction, Grade, Status — never the computed P&L/RR figures, which stay behind the form. The renderer is a plain `inlineCell(...)` *function*, not a nested `<Component>`: a component defined inside render gets a fresh identity every pass and would remount the open editor mid-keystroke, blurring it — a function returning elements reconciles normally. Each commit routes through the same `onBulkEdit(ids, patch, label)` the selection bar uses (single-row batch), so the trade is **replaced not mutated** and `computeTrade`'s `WeakMap` cache re-derives — editing Direction re-signs P&L, editing Status flips open/closed, both correctly. Inline editing is disabled when no `onBulkEdit` is wired (the component tests exercise both paths).
 
