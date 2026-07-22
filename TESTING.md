@@ -12,7 +12,7 @@ Runner is [vitest](https://vitest.dev). No config file — vitest reads `vite.co
 Three suites, two environments:
 
 - `src/lib/trade.test.js` — the rules. Everything under test is pure, so it runs in plain Node: no DOM, no jsdom.
-- `src/App.test.jsx` — component smoke tests (`@testing-library/react` + `user-event`) for the trade form's validation gate, the trades table, the daily journal panel (including its filter) and the strategy playbook tab. jsdom is opted into **per file** via the `// @vitest-environment jsdom` pragma at its top, so the lib suite stays in Node. Deliberately shallow: they assert the components wire the rules to the user (errors surface, saves fire, destructive paths confirm first), not the maths — that lives in the lib suite. `TradeForm`, `TradesTable`, `JournalPanel`, `PlaybookPanel` and `SettingsPanel` are exported from App.jsx for these tests only.
+- `src/App.test.jsx` — component smoke tests (`@testing-library/react` + `user-event`) for the trade form's validation gate, the trades table, the daily journal panel (including its filter) and the strategy playbook tab. jsdom is opted into **per file** via the `// @vitest-environment jsdom` pragma at its top, so the lib suite stays in Node. Deliberately shallow: they assert the components wire the rules to the user (errors surface, saves fire, destructive paths confirm first), not the maths — that lives in the lib suite. `TradeForm`, `TradesTable`, `JournalPanel`, `PlaybookPanel` and `SettingsPanel` are exported from App.tsx for these tests only.
 - `src/App.integration.test.jsx` — the one suite that renders the real default-exported `App`, not an isolated panel. `./lib/storage` is `vi.mock`ed with an in-memory `get/set/delete/list`; `./Charts` is stubbed too, so lazy-loaded Recharts components never actually mount in jsdom. Covers the wiring `App.test.jsx` structurally can't: boot reading meta + shards into the rendered UI, `writtenShardsRef` shard-diffing, the meta/trade save effects staying separate, and `loadError` disabling persistence. See "What is covered" below.
 
 One trap found writing the component tests: the `DateTimePicker` renders inside a `Field` `<label>`, and buttons are labelable elements — so every button in its popover inherits "Entry Date & Time" as its accessible name. Those tests query the picker by text, not by role+name.
@@ -74,7 +74,7 @@ The bugs are fixed; **keep the pin**. It is now the only thing standing between 
 
 ## Conventions
 
-- **New rules go in `lib/trade.ts` with a test.** Not in App.jsx. If logic is pure, it belongs where it can be tested.
+- **New rules go in `lib/trade.ts` with a test.** Not in App.tsx. If logic is pure, it belongs where it can be tested.
 - **Test names read as claims about the product**, not about the function ("realises P&L only on the size that both entered and left", not "computeTrade returns _qty"). A failure should tell you what broke for the trader.
 - **Tests named for a legacy fallback are load-bearance checks.** If "folds a pre-accounts journal into one account…" goes red, a real 2.x journal on disk just stopped loading. Do not delete it to get green.
 - **Comment the arithmetic** where an expected value isn't self-evident (`expect(t.pnlPercent).toBe(10); // 20 / (100 * 2) * 100`).

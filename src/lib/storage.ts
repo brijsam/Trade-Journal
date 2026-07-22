@@ -14,14 +14,25 @@
  *    for a screenshot-heavy trade journal, without needing a backend.
  */
 
+// App.jsx calls every method with a vestigial trailing boolean at many call
+// sites (a leftover from before this shared shape existed); harmless and
+// ignored, kept accepted here rather than touched — a typing pass doesn't
+// also clean up call sites.
+export interface Storage {
+  get(key: string, ...rest: unknown[]): Promise<StorageEntry | null>;
+  set(key: string, value: string, ...rest: unknown[]): Promise<StorageEntry | null>;
+  delete(key: string, ...rest: unknown[]): Promise<{ key: string; deleted: boolean; shared: boolean } | null>;
+  list(prefix?: string, ...rest: unknown[]): Promise<{ keys: string[]; prefix?: string; shared: boolean }>;
+}
+
 const hasElectron = typeof window !== "undefined" && !!window.electronStorage;
 
 const DB_NAME = "brij-trade-journal";
 const STORE_NAME = "kv";
 const DB_VERSION = 1;
 
-let dbPromise = null;
-function openDB() {
+let dbPromise: Promise<IDBDatabase> | null = null;
+function openDB(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -37,7 +48,7 @@ function openDB() {
   return dbPromise;
 }
 
-async function idbGet(key) {
+async function idbGet(key: string): Promise<StorageEntry | null> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readonly");
@@ -49,7 +60,7 @@ async function idbGet(key) {
     req.onerror = () => reject(req.error);
   });
 }
-async function idbSet(key, value) {
+async function idbSet(key: string, value: string): Promise<StorageEntry> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
@@ -58,7 +69,7 @@ async function idbSet(key, value) {
     tx.onerror = () => reject(tx.error);
   });
 }
-async function idbDelete(key) {
+async function idbDelete(key: string): Promise<{ key: string; deleted: boolean; shared: boolean }> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
@@ -67,24 +78,24 @@ async function idbDelete(key) {
     tx.onerror = () => reject(tx.error);
   });
 }
-async function idbList(prefix = "") {
+async function idbList(prefix = ""): Promise<{ keys: string[]; prefix: string; shared: boolean }> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readonly");
     const req = tx.objectStore(STORE_NAME).getAllKeys();
     req.onsuccess = () => {
-      const keys = req.result.filter((k) => !prefix || String(k).startsWith(prefix));
+      const keys = req.result.filter((k) => !prefix || String(k).startsWith(prefix)).map(String);
       resolve({ keys, prefix, shared: false });
     };
     req.onerror = () => reject(req.error);
   });
 }
 
-export const storage = hasElectron
+export const storage: Storage = hasElectron
   ? {
-      get: (key) => window.electronStorage.get(key),
-      set: (key, value) => window.electronStorage.set(key, value),
-      delete: (key) => window.electronStorage.delete(key),
-      list: (prefix) => window.electronStorage.list(prefix),
+      get: (key) => window.electronStorage!.get(key),
+      set: (key, value) => window.electronStorage!.set(key, value),
+      delete: (key) => window.electronStorage!.delete(key),
+      list: (prefix) => window.electronStorage!.list(prefix),
     }
   : { get: idbGet, set: idbSet, delete: idbDelete, list: idbList };

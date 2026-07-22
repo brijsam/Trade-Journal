@@ -12,11 +12,21 @@
 // because callers hand these real user input, storage strings and numbers
 // alike; every fmt* below only ever receives what num()/computeTrade already
 // narrowed to number|null, so they stay strictly typed.
-export const num = (v: unknown, fallback: number | null = null): number | null => {
+// Overloaded so a numeric fallback (the common `num(x, 0)` call, used to force
+// a usable number out of a maybe-blank field) narrows the return to `number`
+// — without this every one of those call sites would need its own null check
+// or cast for a null the fallback already ruled out.
+export function num(v: unknown, fallback: number): number;
+export function num(v: unknown, fallback?: number | null): number | null;
+export function num(v: unknown, fallback: number | null = null): number | null {
   const n = parseFloat(v as string);
   return Number.isFinite(n) ? n : fallback;
-};
+}
 
+// Same overload reasoning as num() above: a definite number in, a definite
+// number out, no null-check needed at the call site for what was never null.
+export function round(v: number, d?: number): number;
+export function round(v: number | null | undefined, d?: number): number | null | undefined;
 export function round(v: number | null | undefined, d = 6): number | null | undefined {
   if (v === null || v === undefined || !Number.isFinite(v)) return v;
   const f = Math.pow(10, d);

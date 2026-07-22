@@ -12,33 +12,35 @@ One codebase, two products:
 No backend. No network calls at runtime. The packaged app must work with the machine offline — that constraint is why fonts are self-hosted and why `xlsx` is bundled rather than fetched.
 
 ```
-index.html        static shell — its <title> must match APP_NAME in App.jsx;
+index.html        static shell — its <title> must match APP_NAME in App.tsx;
                   it is what shows before React mounts (and if it never does)
 src/
   main.jsx        entry; @fontsource imports; mounts <App>
-  App.jsx         the React shell — CSS, tokens, panels, modals, root state
-  Charts.jsx      every Recharts component (lazy-loaded chunk)
+  App.tsx         the React shell — CSS, tokens, panels, modals, root state
+  Charts.tsx      every Recharts component (lazy-loaded chunk)
   lib/
-    trade.js      THE RULES — maths, stats, dates, sharding, CSV, cashflow, normalization
+    trade.ts      THE RULES — maths, stats, dates, sharding, CSV, cashflow, normalization
     trade.test.js the feature suite
-    auth.js       login-gate logic — PBKDF2 hashing (Web Crypto), user records
+    auth.ts       login-gate logic — PBKDF2 hashing (Web Crypto), user records
     auth.test.js  the auth suite
-    format.js     display formatting
-    storage.js    backend switch
+    format.ts     display formatting
+    storage.ts    backend switch
 electron/
   main.cjs        storage IPC, export dialogs, window state, single-instance lock
   preload.cjs     contextBridge: window.electronStorage, window.desktopExport
 ```
 
-**Import direction is one-way: `App.jsx` → `lib/*`.** `Charts.jsx`, `format.js` and `trade.js` must never import `App.jsx`. It is circular, and it would pull the whole app into the lazily-loaded chart chunk, undoing the ~300kB code split that is the only reason `Charts.jsx` exists as a separate file. The linter enforces this: a `no-restricted-imports` block in `eslint.config.js` scoped to `src/lib/**` and `src/Charts.jsx` fails the build on any import of App.
+**Import direction is one-way: `App.tsx` → `lib/*`.** `Charts.tsx`, `format.ts` and `trade.ts` must never import `App.tsx`. It is circular, and it would pull the whole app into the lazily-loaded chart chunk, undoing the ~300kB code split that is the only reason `Charts.tsx` exists as a separate file. The linter enforces this: a `no-restricted-imports` block in `eslint.config.js` scoped to `src/lib/**` and `src/Charts.tsx` fails the build on any import of App.
 
-Practical rule: **pure logic goes in `lib/trade.ts` with a test. Anything touching `window`, `document` or `storage` stays in `App.jsx`.**
+Practical rule: **pure logic goes in `lib/trade.ts` with a test. Anything touching `window`, `document` or `storage` stays in `App.tsx`.**
+
+TypeScript is used throughout (`strict: true`, `tsc --noEmit` chained into `npm run lint`) — see CLAUDE.md § Type safety for the domain types and the two type-collapse traps worth knowing before extending them. Only `main.jsx` and the test files stay plain JS.
 
 ## Storage
 
 ### One interface, two backends
 
-`lib/storage.js` exports `storage` — `get` / `set` / `delete` / `list`, all promise-returning. It picks a backend once, at import:
+`lib/storage.ts` exports `storage` — `get` / `set` / `delete` / `list`, all promise-returning. It picks a backend once, at import:
 
 ```js
 const hasElectron = typeof window !== "undefined" && !!window.electronStorage;
@@ -87,7 +89,7 @@ So no single key nears the browser's ~5MB per-key ceiling as the journal grows.
 
 A single-instance lock in `main.cjs` backs this up: two copies of the app would be two independent writers racing over the same shard files, and atomic rename protects a single write, not two processes.
 
-`loadError` only catches a failed **storage read**. A throw during **render** — anywhere in the component tree, at any point after boot — is a different failure mode with no `loadError` state to catch it, and previously white-screened the app. `ErrorBoundary` (App.jsx, wraps the root `App` render) catches that case: `getDerivedStateFromError` + `componentDidCatch` show a themed fallback screen with a Reload button and log via `console.error`, without touching storage or the save effects — a render bug and a data-loss bug stay distinct failure paths.
+`loadError` only catches a failed **storage read**. A throw during **render** — anywhere in the component tree, at any point after boot — is a different failure mode with no `loadError` state to catch it, and previously white-screened the app. `ErrorBoundary` (App.tsx, wraps the root `App` render) catches that case: `getDerivedStateFromError` + `componentDidCatch` show a themed fallback screen with a Reload button and log via `console.error`, without touching storage or the save effects — a render bug and a data-loss bug stay distinct failure paths.
 
 ## Trade computation
 
@@ -132,7 +134,7 @@ Deleting an account never orphans its trades — a dangling `accountId` resolves
 
 `preferences.density` — `"comfortable"` (default) or `"compact"`; anything else merges back to comfortable. Applied as a `density-compact` class on `.app-root` whose overrides tighten the repeating surfaces (cards, panels, table rows) and leave one-off chrome alone.
 
-`preferences.hiddenColumns` — trades-table column keys the user switched off (see `TRADE_COLUMNS` in App.jsx; Symbol and P&L are locked on). Merged to a clean string array whatever was stored; unknown keys are harmless.
+`preferences.hiddenColumns` — trades-table column keys the user switched off (see `TRADE_COLUMNS` in App.tsx; Symbol and P&L are locked on). Merged to a clean string array whatever was stored; unknown keys are harmless.
 
 `preferences.tableSort` / `preferences.pageSize` — the trades table's sort order (`{ key, dir }`) and rows-per-page (one of `PAGE_SIZES`). The table seeds its own state from these on mount and reports changes back up — it unmounts on every tab switch, and a table that comes back reshuffled reads as the data having changed. `mergePreferences` repairs a corrupt sort to the default and coerces an unknown page size back to 50.
 
@@ -181,7 +183,7 @@ Because the key ignores time-of-day, a day is bounded by its local midnight and 
 
 > Stored trade times are naive wall-clock strings and are **never shifted** — what the user typed is what every zone shows. That asymmetry is the design: a trader journalling the New York session types NY times, and the setting makes "today" agree with those times instead of the machine's clock. Changing the zone must never rewrite or re-bucket an existing trade; there is deliberately no conversion step anywhere.
 
-The setting reaches leaf components through `TimezoneContext` in App.jsx (default `""`), not props — and that default is load-bearing: the component tests render `TradeForm`/`TradesTable` without the provider and get legacy machine-zone behaviour. An unknown zone id (a journal restored onto a runtime with an older tz database) normalizes to `""` in `mergeSettings` rather than failing the load.
+The setting reaches leaf components through `TimezoneContext` in App.tsx (default `""`), not props — and that default is load-bearing: the component tests render `TradeForm`/`TradesTable` without the provider and get legacy machine-zone behaviour. An unknown zone id (a journal restored onto a runtime with an older tz database) normalizes to `""` in `mergeSettings` rather than failing the load.
 
 `tzOffsetLabel(tz, at)` renders a zone's live GMT offset (`GMT+5:30`, `GMT-4`) — derived from `zonedNow` so the two can never disagree, and "now"-relative because DST moves it through the year. It labels every option in the Settings picker and marks the topbar clock whenever the journal is pinned to a zone, so a clock that disagrees with the machine's taskbar explains itself. The clock itself renders 12- or 24-hour from `preferences.clockFormat` (`"12h"` legacy default, constrained in `mergePreferences`).
 
@@ -235,7 +237,7 @@ Tab switches run through `withTabTransition`, which uses the View Transitions AP
 
 The freeze itself is `useBodyScrollLock()` — one module-level reference count shared by every `Modal` instance and `CommandPalette`, not each locking and restoring independently. The palette is deliberately allowed to open *on top of* a modal (Ctrl/Cmd+K works from inside a dialog), so two lockers being alive at once is normal; only the count reaching 0 touches the DOM, so whichever order they close in, the body ends up correctly unlocked. Two independent locks used to do this — closing the modal before the palette that opened on top of it left the body at `overflow: hidden` forever, with nothing left open to blame. See [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
-**Command palette** — Ctrl/Cmd+K. Actions (new trade, tab jumps, sidebar, shortcuts, the 12 themes) plus a live trade search over the whole journal (id / symbol / direction / status / market / strategy / tags / account — global on purpose, not scoped to the account in view). Matching and ranking are `paletteFilter()` in `lib/trade.ts` — pure, token-AND, word-start-over-mid-word — pinned by tests; the component in App.jsx is just the shell. With no query only the leading actions show, so the idle list stays short.
+**Command palette** — Ctrl/Cmd+K. Actions (new trade, tab jumps, sidebar, shortcuts, the 12 themes) plus a live trade search over the whole journal (id / symbol / direction / status / market / strategy / tags / account — global on purpose, not scoped to the account in view). Matching and ranking are `paletteFilter()` in `lib/trade.ts` — pure, token-AND, word-start-over-mid-word — pinned by tests; the component in App.tsx is just the shell. With no query only the leading actions show, so the idle list stays short.
 
 **Trades table — ServiceNow-style inline list edit.** Hovering a row reveals a pencil in each editable cell (double-click the cell works too); it turns that one cell into an input/select, and Enter (text) or picking an option (select) commits. The editable set is the **metadata** columns only — Symbol, Market, Direction, Grade, Status — never the computed P&L/RR figures, which stay behind the form. The renderer is a plain `inlineCell(...)` *function*, not a nested `<Component>`: a component defined inside render gets a fresh identity every pass and would remount the open editor mid-keystroke, blurring it — a function returning elements reconciles normally. Each commit routes through the same `onBulkEdit(ids, patch, label)` the selection bar uses (single-row batch), so the trade is **replaced not mutated** and `computeTrade`'s `WeakMap` cache re-derives — editing Direction re-signs P&L, editing Status flips open/closed, both correctly. Inline editing is disabled when no `onBulkEdit` is wired (the component tests exercise both paths).
 
@@ -253,13 +255,13 @@ Fonts (Inter, Space Grotesk, JetBrains Mono) are self-hosted via `@fontsource` i
 
 ## Charts
 
-`Charts.jsx` holds every Recharts component and is pulled in with `React.lazy` via `lazyChart()` in App.jsx, keeping ~300kB of charting out of the initial bundle. Once the app has loaded, an idle-time effect in App warms the chunk (`import("./Charts")` under `requestIdleCallback` — the same specifier `lazyChart` uses, so Vite reuses one chunk): a session restored onto a chartless tab then doesn't pay the download on its first visit to Dashboard or Analytics. While the chunk loads, each chart's Suspense fallback is a `.chart-loading` shimmer sized to the chart it replaces.
+`Charts.tsx` holds every Recharts component and is pulled in with `React.lazy` via `lazyChart()` in App.tsx, keeping ~300kB of charting out of the initial bundle. Once the app has loaded, an idle-time effect in App warms the chunk (`import("./Charts")` under `requestIdleCallback` — the same specifier `lazyChart` uses, so Vite reuses one chunk): a session restored onto a chartless tab then doesn't pay the download on its first visit to Dashboard or Analytics. While the chunk loads, each chart's Suspense fallback is a `.chart-loading` shimmer sized to the chart it replaces.
 
 **Every `Bar`, `Pie` and `Area` sets `isAnimationActive={false}`, and new ones must too.** Recharts' entrance animation doesn't run to completion when the module mounts lazily, which leaves marks stuck at their zero-size first frame: bars render as nothing, pie sectors collapse to radius 0. Recharts also gates `<LabelList>` on the parent's animation having finished, so leaving animation on hides value labels even where the bars survive.
 
 ## Exports
 
-`saveTextExport` / `saveBinaryExport` in App.jsx hide the desktop/web split — Electron gets a native Save As through `window.desktopExport`, the web build downloads a blob. Every helper resolves `{ ok, canceled?, path? }` so callers can toast without caring which ran.
+`saveTextExport` / `saveBinaryExport` in App.tsx hide the desktop/web split — Electron gets a native Save As through `window.desktopExport`, the web build downloads a blob. Every helper resolves `{ ok, canceled?, path? }` so callers can toast without caring which ran.
 
 - **PDF** — desktop renders the report HTML in an offscreen `BrowserWindow` and calls `printToPDF` (a real PDF). Web writes the HTML into an offscreen iframe and opens the print dialog, where the user picks "Save as PDF".
 - **Excel** — `xlsx` is imported on demand *inside* the exporter, not at module scope, so it stays out of the main bundle.

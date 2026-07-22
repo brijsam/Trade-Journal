@@ -85,9 +85,9 @@ The suite is pinned to `TZ=Asia/Kolkata` on purpose. See [TESTING.md](TESTING.md
 
 ## Stack
 
-React 19 · Vite 8 · Recharts · Electron 43 · electron-builder · vitest · TypeScript (`src/lib/*`, incremental — see CLAUDE.md § Type safety). No CSS framework — themes are CSS custom properties injected per theme.
+React 19 · Vite 8 · Recharts · Electron 43 · electron-builder · vitest · TypeScript (`strict: true`, whole app — see CLAUDE.md § Type safety). No CSS framework — themes are CSS custom properties injected per theme.
 
-New rules belong in `src/lib/trade.ts` with a test. `src/App.jsx` is the React shell; anything pure that lands there can't be tested.
+New rules belong in `src/lib/trade.ts` with a test. `src/App.tsx` is the React shell; anything pure that lands there can't be tested.
 
 ## License
 

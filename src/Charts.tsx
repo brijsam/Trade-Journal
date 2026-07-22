@@ -17,13 +17,25 @@
  * the parent's animation having finished, so leaving animation on hides the
  * value labels even where the bars themselves survive.
  */
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area, ReferenceLine, LabelList,
   ScatterChart, Scatter,
 } from 'recharts';
 import { round, fmtCurrency, fmtPercent, fmtProfitFactor, fmtSignedCurrency, fmtSignedPercent } from './lib/format';
+import type { ComputedTrade, EquityPoint, PerformanceRow } from './lib/trade';
+
+// Recharts' own render-prop types (label/content/tickFormatter callbacks) are
+// deep generics keyed to its internal Payload/AxisDomainItem shapes, and
+// fighting them precisely buys nothing here — the values worth catching bugs
+// in are the trade domain types (ComputedTrade, PerformanceRow, EquityPoint)
+// flowing through each component's own props, typed below. Recharts' render
+// callbacks stay loosely typed at that boundary, same as any 3rd-party
+// interop point.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Any = any;
+
 const CHART_TOOLTIP_STYLE = { background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: "var(--text-primary)" };
 /* Hover cursor for every bar chart: Recharts' default paints a solid grey band
    over the hovered category column, which reads as a glitched background on
@@ -34,8 +46,8 @@ const BAR_CURSOR = { fill: "transparent" };
    ~25% over the tallest mark — a $25 peak puts the axis top around $32 instead
    of clipping the label against the frame. Shared by the vertical charts' Y
    axis and the horizontal charts' numeric X axis. */
-const padMax = (dataMax) => (dataMax > 0 ? Math.ceil(dataMax * 1.25) : 1);
-const PAD_DOMAIN = [0, padMax];
+const padMax = (dataMax: number): number => (dataMax > 0 ? Math.ceil(dataMax * 1.25) : 1);
+const PAD_DOMAIN: [number, typeof padMax] = [0, padMax];
 /* Renders a value label on a bar. Bars are always drawn from an absolute value
    so nothing crosses the axis, so the label reads the row's true signed value
    instead — a loss shows "-$50" above a bar that points up. Rows with a zero or
@@ -48,9 +60,9 @@ const PAD_DOMAIN = [0, padMax];
    NOTE: the Bar must also set isAnimationActive={false}. Recharts only exposes
    the label context while `!isAnimating`, and with animation left on the labels
    never appear. */
-const barRow = (entry) => entry.payload;
-function barLabel(format, { valueKey = "pnl", color, horizontal = false } = {}) {
-  return (props) => {
+const barRow = (entry: Any): Any => entry.payload;
+function barLabel(format: (v: Any, row: Any) => ReactNode, { valueKey = "pnl", color, horizontal = false }: { valueKey?: string; color?: (row: Any) => string; horizontal?: boolean } = {}) {
+  return (props: Any): Any => {
     const row = props.value;
     const box = props.viewBox || {};
     if (!row) return null;
@@ -67,7 +79,7 @@ function barLabel(format, { valueKey = "pnl", color, horizontal = false } = {}) 
   };
 }
 
-export function EquityCurveChart({ points }) {
+export function EquityCurveChart({ points }: { points: EquityPoint[] }) {
   /* Numeric time axis, not category: several trades closing the same day used
      to render duplicate ticks of the same label, and uneven gaps between
      trades all drew the same width. The lib's "Start" point carries ts 0 (no
@@ -81,33 +93,33 @@ export function EquityCurveChart({ points }) {
     const lead = Math.max((last - first) / 20, 3600000);
     return points.map((p, i) => (i === 0 ? { ...p, ts: first - lead } : p));
   }, [points]);
-  const fmtTick = (ts) => new Date(ts).toLocaleDateString(undefined, { month: "short", day: "2-digit" });
+  const fmtTick = (ts: number): string => new Date(ts).toLocaleDateString(undefined, { month: "short", day: "2-digit" });
   return (
     <ResponsiveContainer width="100%" height={280}>
       <AreaChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
         <defs><linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity={0.35} /><stop offset="100%" stopColor="var(--accent)" stopOpacity={0} /></linearGradient></defs>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="ts" type="number" domain={["dataMin", "dataMax"]} scale="time" tickFormatter={fmtTick} tick={{ fontSize: 10, fill: "var(--text-muted)" }} minTickGap={30} />
-        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => `$${v.toLocaleString()}`} width={70} padding={{ top: 10, bottom: 6 }} />
+        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v: number) => `$${v.toLocaleString()}`} width={70} padding={{ top: 10, bottom: 6 }} />
         <Tooltip
-          contentStyle={CHART_TOOLTIP_STYLE} formatter={(v) => fmtCurrency(v)}
-          labelFormatter={(ts, payload) => payload?.[0]?.payload?.date ?? ""}
+          contentStyle={CHART_TOOLTIP_STYLE} formatter={(v: Any) => fmtCurrency(v)}
+          labelFormatter={(_ts: Any, payload: Any) => payload?.[0]?.payload?.date ?? ""}
         />
         <Area type="monotone" dataKey="balance" stroke="var(--accent)" strokeWidth={2} fill="url(#eqGrad)" isAnimationActive={false} />
       </AreaChart>
     </ResponsiveContainer>
   );
 }
-export function DailyPnLChart({ data, mode = "amount" }) {
+export function DailyPnLChart({ data, mode = "amount" }: { data: PerformanceRow[]; mode?: string }) {
   const valueKey = mode === "percent" ? "pnlPercent" : "pnl";
-  const displayData = useMemo(() => data.map((d) => ({ ...d, _abs: Math.abs(d[valueKey] ?? 0) })), [data, valueKey]);
+  const displayData = useMemo(() => data.map((d) => ({ ...d, _abs: Math.abs((d[valueKey] as number) ?? 0) })), [data, valueKey]);
   return (
     <ResponsiveContainer width="100%" height={240}>
       <BarChart data={displayData} margin={{ top: 22, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--text-muted)" }} minTickGap={20} />
-        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => mode === "percent" ? `${v}%` : `$${v}`} width={60} domain={PAD_DOMAIN} />
-        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }) => {
+        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v: number) => mode === "percent" ? `${v}%` : `$${v}`} width={60} domain={PAD_DOMAIN} />
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }: Any) => {
           if (!active || !payload?.length) return null;
           const p = payload[0]?.payload;
           const val = p?.[valueKey];
@@ -123,23 +135,23 @@ export function DailyPnLChart({ data, mode = "amount" }) {
         }} />
         <ReferenceLine y={0} stroke="var(--border)" />
         <Bar dataKey="_abs" radius={[3, 3, 0, 0]} isAnimationActive={false}>
-          <LabelList valueAccessor={barRow} content={barLabel((v, d) => `${fmtSignedCurrency(d.pnl)} / ${fmtSignedPercent(d.pnlPercent, 1)}`, { valueKey })} />
-          {displayData.map((d, i) => <Cell key={i} fill={d[valueKey] >= 0 ? "var(--profit)" : "var(--loss)"} />)}
+          <LabelList valueAccessor={barRow} content={barLabel((_v, d) => `${fmtSignedCurrency(d.pnl)} / ${fmtSignedPercent(d.pnlPercent, 1)}`, { valueKey })} />
+          {displayData.map((d, i) => <Cell key={i} fill={(d[valueKey] as number) >= 0 ? "var(--profit)" : "var(--loss)"} />)}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
   );
 }
-export function MonthlyChart({ data, mode = "amount" }) {
+export function MonthlyChart({ data, mode = "amount" }: { data: PerformanceRow[]; mode?: string }) {
   const valueKey = mode === "percent" ? "pnlPercent" : "pnl";
-  const displayData = useMemo(() => data.map((d) => ({ ...d, _abs: Math.abs(d[valueKey] ?? 0) })), [data, valueKey]);
+  const displayData = useMemo(() => data.map((d) => ({ ...d, _abs: Math.abs((d[valueKey] as number) ?? 0) })), [data, valueKey]);
   return (
     <ResponsiveContainer width="100%" height={240}>
       <BarChart data={displayData} margin={{ top: 22, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="month" tick={{ fontSize: 10, fill: "var(--text-muted)" }} />
-        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => mode === "percent" ? `${v}%` : `$${v}`} width={60} domain={PAD_DOMAIN} />
-        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }) => {
+        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v: number) => mode === "percent" ? `${v}%` : `$${v}`} width={60} domain={PAD_DOMAIN} />
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }: Any) => {
           if (!active || !payload?.length) return null;
           const p = payload[0]?.payload;
           const val = p?.[valueKey];
@@ -155,19 +167,19 @@ export function MonthlyChart({ data, mode = "amount" }) {
         }} />
         <ReferenceLine y={0} stroke="var(--border)" />
         <Bar dataKey="_abs" radius={[3, 3, 0, 0]} isAnimationActive={false}>
-          <LabelList valueAccessor={barRow} content={barLabel((v, d) => `${fmtSignedCurrency(d.pnl)} / ${fmtSignedPercent(d.pnlPercent, 1)}`, { valueKey })} />
-          {displayData.map((d, i) => <Cell key={i} fill={d[valueKey] >= 0 ? "var(--profit)" : "var(--loss)"} />)}
+          <LabelList valueAccessor={barRow} content={barLabel((_v, d) => `${fmtSignedCurrency(d.pnl)} / ${fmtSignedPercent(d.pnlPercent, 1)}`, { valueKey })} />
+          {displayData.map((d, i) => <Cell key={i} fill={(d[valueKey] as number) >= 0 ? "var(--profit)" : "var(--loss)"} />)}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
   );
 }
-export function WinLossPie({ wins, losses, breakeven }) {
+export function WinLossPie({ wins, losses, breakeven }: { wins: number; losses: number; breakeven?: number }) {
   const data = [{ name: "Wins", value: wins, color: "var(--profit)" }, { name: "Losses", value: losses, color: "var(--loss)" }, ...(breakeven ? [{ name: "Breakeven", value: breakeven, color: "var(--text-muted)" }] : [])].filter((d) => d.value > 0);
   if (data.length === 0) return <div className="empty-state-sm">No closed trades yet.</div>;
   // Label sits in the middle of the donut band. Slices under 8% are skipped —
   // the arc is too short to hold the text without it spilling into a neighbour.
-  const sliceLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, value, percent }) => {
+  const sliceLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, value, percent }: Any) => {
     if (percent < 0.08) return null;
     const RADIAN = Math.PI / 180;
     const r = innerRadius + (outerRadius - innerRadius) / 2;
@@ -193,10 +205,11 @@ export function WinLossPie({ wins, losses, breakeven }) {
     </ResponsiveContainer>
   );
 }
-function round1(v) { return v === null || v === undefined || !Number.isFinite(v) ? 0 : Math.round(v * 10) / 10; }
-function clamp(v, lo, hi) { if (v === null || !Number.isFinite(v)) return 0; return Math.max(lo, Math.min(hi, v)); }
-function fmtMetric(v, suffix) { return (v < 0 ? `-${Math.abs(v)}` : String(v)) + suffix; }
-export function LongShortChart({ longStats, shortStats }) {
+function round1(v: number | null): number { return v === null || v === undefined || !Number.isFinite(v) ? 0 : Math.round(v * 10) / 10; }
+function clamp(v: number | null, lo: number, hi: number): number { if (v === null || !Number.isFinite(v)) return 0; return Math.max(lo, Math.min(hi, v)); }
+function fmtMetric(v: number, suffix: string): string { return (v < 0 ? `-${Math.abs(v)}` : String(v)) + suffix; }
+export interface DirectionStats { winRate: number | null; avgRR: number | null; profitFactor: number | null; }
+export function LongShortChart({ longStats, shortStats }: { longStats: DirectionStats; shortStats: DirectionStats }) {
   const data = [
     { metric: "Win Rate %", suffix: "%", Long: round1(longStats.winRate), Short: round1(shortStats.winRate) },
     { metric: "Avg RR", suffix: "R", Long: round1(longStats.avgRR), Short: round1(shortStats.avgRR) },
@@ -208,7 +221,7 @@ export function LongShortChart({ longStats, shortStats }) {
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="metric" tick={{ fontSize: 10, fill: "var(--text-muted)" }} />
         <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={40} domain={PAD_DOMAIN} />
-        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }) => {
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }: Any) => {
           if (!active || !payload?.length) return null;
           const d = payload[0]?.payload;
           return (
@@ -230,7 +243,7 @@ export function LongShortChart({ longStats, shortStats }) {
     </ResponsiveContainer>
   );
 }
-export function RRDistributionChart({ trades }) {
+export function RRDistributionChart({ trades }: { trades: ComputedTrade[] }) {
   const buckets = ["<-1R", "-1..0R", "0..1R", "1..2R", "2..3R", "3..5R", ">5R"];
   const counts = new Array(buckets.length).fill(0);
   const pnls = new Array(buckets.length).fill(0);
@@ -240,7 +253,7 @@ export function RRDistributionChart({ trades }) {
     let idx;
     if (r < -1) idx = 0; else if (r < 0) idx = 1; else if (r < 1) idx = 2; else if (r < 2) idx = 3; else if (r < 3) idx = 4; else if (r < 5) idx = 5; else idx = 6;
     counts[idx] += 1;
-    if (Number.isFinite(t.pnlAmount)) pnls[idx] += t.pnlAmount;
+    if (Number.isFinite(t.pnlAmount)) pnls[idx] += t.pnlAmount as number;
   });
   const data = buckets.map((b, i) => ({ bucket: b, count: counts[i], pnl: round(pnls[i], 2), isLoss: i <= 1 }));
   return (
@@ -249,7 +262,7 @@ export function RRDistributionChart({ trades }) {
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="bucket" tick={{ fontSize: 10, fill: "var(--text-muted)" }} />
         <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={30} allowDecimals={false} domain={PAD_DOMAIN} />
-        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }) => {
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }: Any) => {
           if (!active || !payload?.length) return null;
           const d = payload[0]?.payload;
           return (
@@ -268,23 +281,23 @@ export function RRDistributionChart({ trades }) {
     </ResponsiveContainer>
   );
 }
-export function HourOfDayChart({ trades }) {
+export function HourOfDayChart({ trades }: { trades: ComputedTrade[] }) {
   const buckets = new Array(24).fill(0).map(() => ({ pnl: 0, count: 0, wins: 0 }));
   trades.forEach((t) => {
     if (!t.entryDateTime) return;
     const hour = new Date(t.entryDateTime).getHours();
     if (Number.isNaN(hour)) return;
-    buckets[hour].pnl += t.pnlAmount; buckets[hour].count += 1;
+    buckets[hour].pnl += (t.pnlAmount as number) ?? 0; buckets[hour].count += 1;
     if (t.result === "win") buckets[hour].wins += 1;
   });
-  const data = buckets.map((b, h) => { const pnl = round(b.pnl, 2); return { hour: `${String(h).padStart(2, "0")}:00`, pnl, _abs: Math.abs(pnl), count: b.count, winRate: b.count ? (b.wins / b.count) * 100 : 0 }; });
+  const data = buckets.map((b, h) => { const pnl = round(b.pnl, 2) as number; return { hour: `${String(h).padStart(2, "0")}:00`, pnl, _abs: Math.abs(pnl), count: b.count, winRate: b.count ? (b.wins / b.count) * 100 : 0 }; });
   return (
     <ResponsiveContainer width="100%" height={240}>
       <BarChart data={data} margin={{ top: 22, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="hour" tick={{ fontSize: 9, fill: "var(--text-muted)" }} interval={2} />
-        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={50} tickFormatter={(v) => fmtCurrency(v)} domain={PAD_DOMAIN} />
-        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }) => {
+        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={50} tickFormatter={(v: number) => fmtCurrency(v)} domain={PAD_DOMAIN} />
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }: Any) => {
           if (!active || !payload?.length) return null;
           const d = payload[0]?.payload;
           return (
@@ -304,24 +317,24 @@ export function HourOfDayChart({ trades }) {
     </ResponsiveContainer>
   );
 }
-export function DayOfWeekChart({ trades }) {
+export function DayOfWeekChart({ trades }: { trades: ComputedTrade[] }) {
   const names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const buckets = names.map(() => ({ pnl: 0, count: 0, wins: 0 }));
   trades.forEach((t) => {
     if (!t.exitDateTime) return;
     const dow = new Date(t.exitDateTime).getDay();
     if (Number.isNaN(dow)) return;
-    buckets[dow].pnl += t.pnlAmount; buckets[dow].count += 1;
+    buckets[dow].pnl += (t.pnlAmount as number) ?? 0; buckets[dow].count += 1;
     if (t.result === "win") buckets[dow].wins += 1;
   });
-  const data = names.map((day, i) => { const pnl = round(buckets[i].pnl, 2); return { day, pnl, _abs: Math.abs(pnl), count: buckets[i].count, winRate: buckets[i].count ? (buckets[i].wins / buckets[i].count) * 100 : 0 }; });
+  const data = names.map((day, i) => { const pnl = round(buckets[i].pnl, 2) as number; return { day, pnl, _abs: Math.abs(pnl), count: buckets[i].count, winRate: buckets[i].count ? (buckets[i].wins / buckets[i].count) * 100 : 0 }; });
   return (
     <ResponsiveContainer width="100%" height={240}>
       <BarChart data={data} margin={{ top: 22, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="day" tick={{ fontSize: 10, fill: "var(--text-muted)" }} />
-        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={50} tickFormatter={(v) => fmtCurrency(v)} domain={PAD_DOMAIN} />
-        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }) => {
+        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={50} tickFormatter={(v: number) => fmtCurrency(v)} domain={PAD_DOMAIN} />
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }: Any) => {
           if (!active || !payload?.length) return null;
           const d = payload[0]?.payload;
           return (
@@ -340,7 +353,7 @@ export function DayOfWeekChart({ trades }) {
     </ResponsiveContainer>
   );
 }
-export function DurationHistogramChart({ trades }) {
+export function DurationHistogramChart({ trades }: { trades: ComputedTrade[] }) {
   const buckets = ["<15m", "15-60m", "1-4h", "4-24h", "1-3d", ">3d"];
   const wins = new Array(buckets.length).fill(0);
   const losses = new Array(buckets.length).fill(0);
@@ -359,7 +372,7 @@ export function DurationHistogramChart({ trades }) {
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey="bucket" tick={{ fontSize: 10, fill: "var(--text-muted)" }} />
         <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={30} allowDecimals={false} domain={PAD_DOMAIN} />
-        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }) => {
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }: Any) => {
           if (!active || !payload?.length) return null;
           const d = payload[0]?.payload;
           const total = (d.Wins || 0) + (d.Losses || 0);
@@ -379,10 +392,11 @@ export function DurationHistogramChart({ trades }) {
     </ResponsiveContainer>
   );
 }
-export function AssetPerformanceChart({ trades, mode = "amount" }) {
+interface AssetRow { pnl: number; pctSum: number; pctCount: number; trades: number; wins: number; losses: number; }
+export function AssetPerformanceChart({ trades, mode = "amount" }: { trades: ComputedTrade[]; mode?: string }) {
   const valueKey = mode === "percent" ? "pnlPercent" : "pnl";
   const data = useMemo(() => {
-    const map = {};
+    const map: Record<string, AssetRow> = {};
     trades.forEach((t) => {
       if (t.status !== "Closed" || t.pnlAmount === null) return;
       const key = t.symbol || "Unspecified";
@@ -390,7 +404,7 @@ export function AssetPerformanceChart({ trades, mode = "amount" }) {
       map[key].pnl += t.pnlAmount; map[key].trades += 1;
       if (t.result === "win") map[key].wins += 1;
       if (t.result === "loss") map[key].losses += 1;
-      if (Number.isFinite(t.pnlPercent)) { map[key].pctSum += t.pnlPercent; map[key].pctCount += 1; }
+      if (Number.isFinite(t.pnlPercent)) { map[key].pctSum += t.pnlPercent as number; map[key].pctCount += 1; }
     });
     return Object.entries(map).map(([symbol, row]) => ({
       symbol, pnl: row.pnl,
@@ -405,9 +419,9 @@ export function AssetPerformanceChart({ trades, mode = "amount" }) {
     <ResponsiveContainer width="100%" height={Math.max(200, data.length * 34)}>
       <BarChart data={data} layout="vertical" margin={{ top: 6, right: 130, left: 8, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" horizontal={false} />
-        <XAxis type="number" tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => mode === "percent" ? `${v}%` : `$${v}`} domain={PAD_DOMAIN} />
+        <XAxis type="number" tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v: number) => mode === "percent" ? `${v}%` : `$${v}`} domain={PAD_DOMAIN} />
         <YAxis type="category" dataKey="symbol" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} width={80} />
-        <Tooltip cursor={BAR_CURSOR} content={({ active, payload }) => {
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload }: Any) => {
           if (!active || !payload?.length) return null;
           const p = payload[0]?.payload;
           const val = p?.[valueKey];
@@ -421,17 +435,17 @@ export function AssetPerformanceChart({ trades, mode = "amount" }) {
           );
         }} />
         <Bar dataKey="_abs" radius={[0, 3, 3, 0]} isAnimationActive={false}>
-          <LabelList valueAccessor={barRow} content={barLabel((v, d) => `${fmtSignedCurrency(d.pnl)} / ${fmtSignedPercent(d.pnlPercent, 1)}`, { valueKey, horizontal: true })} />
-          {data.map((d, i) => <Cell key={i} fill={d[valueKey] >= 0 ? "var(--profit)" : "var(--loss)"} />)}
+          <LabelList valueAccessor={barRow} content={barLabel((_v, d) => `${fmtSignedCurrency(d.pnl)} / ${fmtSignedPercent(d.pnlPercent, 1)}`, { valueKey, horizontal: true })} />
+          {data.map((d, i) => <Cell key={i} fill={(d[valueKey as keyof typeof d] as number) >= 0 ? "var(--profit)" : "var(--loss)"} />)}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
   );
 }
-export function StrategyPerformanceChart({ trades, mode = "amount" }) {
+export function StrategyPerformanceChart({ trades, mode = "amount" }: { trades: ComputedTrade[]; mode?: string }) {
   const valueKey = mode === "percent" ? "pnlPercent" : "pnl";
   const data = useMemo(() => {
-    const map = {};
+    const map: Record<string, AssetRow> = {};
     trades.forEach((t) => {
       if (t.status !== "Closed" || t.pnlAmount === null) return;
       const key = t.strategy?.trim() || "Unspecified";
@@ -439,7 +453,7 @@ export function StrategyPerformanceChart({ trades, mode = "amount" }) {
       map[key].pnl += t.pnlAmount; map[key].trades += 1;
       if (t.result === "win") map[key].wins += 1;
       if (t.result === "loss") map[key].losses += 1;
-      if (Number.isFinite(t.pnlPercent)) { map[key].pctSum += t.pnlPercent; map[key].pctCount += 1; }
+      if (Number.isFinite(t.pnlPercent)) { map[key].pctSum += t.pnlPercent as number; map[key].pctCount += 1; }
     });
     return Object.entries(map).map(([strategy, row]) => ({
       strategy, pnl: row.pnl,
@@ -454,9 +468,9 @@ export function StrategyPerformanceChart({ trades, mode = "amount" }) {
     <ResponsiveContainer width="100%" height={Math.max(220, data.length * 36)}>
       <BarChart data={data} layout="vertical" margin={{ top: 6, right: 130, left: 8, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" horizontal={false} />
-        <XAxis type="number" tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => mode === "percent" ? `${v}%` : `$${v}`} domain={PAD_DOMAIN} />
+        <XAxis type="number" tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v: number) => mode === "percent" ? `${v}%` : `$${v}`} domain={PAD_DOMAIN} />
         <YAxis type="category" dataKey="strategy" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} width={130} />
-        <Tooltip cursor={BAR_CURSOR} content={({ active, payload }) => {
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload }: Any) => {
           if (!active || !payload?.length) return null;
           const p = payload[0]?.payload;
           const val = p?.[valueKey];
@@ -470,24 +484,24 @@ export function StrategyPerformanceChart({ trades, mode = "amount" }) {
           );
         }} />
         <Bar dataKey="_abs" radius={[0, 3, 3, 0]} isAnimationActive={false}>
-          <LabelList valueAccessor={barRow} content={barLabel((v, d) => `${fmtSignedCurrency(d.pnl)} / ${fmtSignedPercent(d.pnlPercent, 1)}`, { valueKey, horizontal: true })} />
-          {data.map((d, i) => <Cell key={i} fill={d[valueKey] >= 0 ? "var(--profit)" : "var(--loss)"} />)}
+          <LabelList valueAccessor={barRow} content={barLabel((_v, d) => `${fmtSignedCurrency(d.pnl)} / ${fmtSignedPercent(d.pnlPercent, 1)}`, { valueKey, horizontal: true })} />
+          {data.map((d, i) => <Cell key={i} fill={(d[valueKey as keyof typeof d] as number) >= 0 ? "var(--profit)" : "var(--loss)"} />)}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
   );
 }
-export function PerformanceBarChart({ data, labelKey, mode = "amount" }) {
+export function PerformanceBarChart({ data, labelKey, mode = "amount" }: { data: PerformanceRow[]; labelKey: string; mode?: string }) {
   const valueKey = mode === "percent" ? "pnlPercent" : "pnl";
-  const displayData = useMemo(() => data.slice(-18).map((d) => ({ ...d, _abs: Math.abs(d[valueKey] ?? 0) })), [data, valueKey]);
+  const displayData = useMemo(() => data.slice(-18).map((d) => ({ ...d, _abs: Math.abs((d[valueKey] as number) ?? 0) })), [data, valueKey]);
   if (displayData.length === 0) return <div className="empty-state-sm">No closed trades yet.</div>;
   return (
     <ResponsiveContainer width="100%" height={240}>
       <BarChart data={displayData} margin={{ top: 22, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
         <XAxis dataKey={labelKey} tick={{ fontSize: 10, fill: "var(--text-muted)" }} />
-        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={54} tickFormatter={(v) => mode === "percent" ? `${v}%` : `$${v}`} domain={PAD_DOMAIN} />
-        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }) => {
+        <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={54} tickFormatter={(v: number) => mode === "percent" ? `${v}%` : `$${v}`} domain={PAD_DOMAIN} />
+        <Tooltip cursor={BAR_CURSOR} content={({ active, payload, label }: Any) => {
           if (!active || !payload?.length) return null;
           const p = payload[0]?.payload;
           const val = p?.[valueKey];
@@ -503,8 +517,8 @@ export function PerformanceBarChart({ data, labelKey, mode = "amount" }) {
         }} />
         <Legend wrapperStyle={{ fontSize: 11, color: "var(--text-secondary)" }} />
         <Bar dataKey="_abs" name={mode === "percent" ? "Avg P&L %" : "P&L"} radius={[3, 3, 0, 0]} isAnimationActive={false}>
-          <LabelList valueAccessor={barRow} content={barLabel((v, d) => `${fmtSignedCurrency(d.pnl)} / ${fmtSignedPercent(d.pnlPercent, 1)}`, { valueKey })} />
-          {displayData.map((d, i) => <Cell key={i} fill={d[valueKey] >= 0 ? "var(--profit)" : "var(--loss)"} />)}
+          <LabelList valueAccessor={barRow} content={barLabel((_v, d) => `${fmtSignedCurrency(d.pnl)} / ${fmtSignedPercent(d.pnlPercent, 1)}`, { valueKey })} />
+          {displayData.map((d, i) => <Cell key={i} fill={(d[valueKey] as number) >= 0 ? "var(--profit)" : "var(--loss)"} />)}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
@@ -517,7 +531,7 @@ export function PerformanceBarChart({ data, labelKey, mode = "amount" }) {
    excursion, y is the realized P&L. The dashed diagonal is a perfect capture
    (y = x): points sitting on it took the whole favorable move, points well
    below it gave profit back before exiting. MAE rides along in the tooltip. */
-export function MaeMfeChart({ trades }) {
+export function MaeMfeChart({ trades }: { trades: ComputedTrade[] }) {
   const data = useMemo(() => trades
     .filter((t) => t.result && (t._mfe !== null || t._mae !== null))
     .map((t) => {
@@ -536,13 +550,13 @@ export function MaeMfeChart({ trades }) {
     <ResponsiveContainer width="100%" height={300}>
       <ScatterChart margin={{ top: 10, right: 20, left: 6, bottom: 16 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" />
-        <XAxis type="number" dataKey="mfe" name="MFE" tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => `$${v}`} domain={PAD_DOMAIN}
+        <XAxis type="number" dataKey="mfe" name="MFE" tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v: number) => `$${v}`} domain={PAD_DOMAIN}
           label={{ value: "Max Favorable Excursion ($)", position: "insideBottom", offset: -8, fontSize: 10, fill: "var(--text-muted)" }} />
         {/* Losses live below zero here, so the floor pads downward too. */}
-        <YAxis type="number" dataKey="pnl" name="P&L" tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={60} tickFormatter={(v) => `$${v}`} domain={[(dataMin) => (dataMin < 0 ? Math.floor(dataMin * 1.25) : 0), padMax]} />
+        <YAxis type="number" dataKey="pnl" name="P&L" tick={{ fontSize: 10, fill: "var(--text-muted)" }} width={60} tickFormatter={(v: number) => `$${v}`} domain={[(dataMin: number) => (dataMin < 0 ? Math.floor(dataMin * 1.25) : 0), padMax] as Any} />
         <ReferenceLine segment={[{ x: 0, y: 0 }, { x: maxAxis, y: maxAxis }]} stroke="var(--accent)" strokeDasharray="4 4" ifOverflow="hidden" />
         <ReferenceLine y={0} stroke="var(--border)" />
-        <Tooltip cursor={{ strokeDasharray: "3 3" }} content={({ active, payload }) => {
+        <Tooltip cursor={{ strokeDasharray: "3 3" }} content={({ active, payload }: Any) => {
           if (!active || !payload?.length) return null;
           const p = payload[0]?.payload;
           if (!p) return null;

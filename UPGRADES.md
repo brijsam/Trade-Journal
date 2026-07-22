@@ -109,7 +109,7 @@ Don't weaken production code just to make it easier to test.
 
 ---
 
-## 🟨 Batch #4 — TypeScript (biggest effort — do LAST) — lib done, App.jsx deferred (2026-07-22)
+## ✅ Batch #4 — TypeScript (biggest effort — do LAST) (2026-07-22, two sessions)
 
 **Why:** zero static type safety over a ~5.2k-line `App.jsx` and a
 ~1.1k-line `lib/trade.js`. Highest-leverage improvement for a codebase this
@@ -158,6 +158,40 @@ in eslint.config.js **and** now `src/vite-env.d.ts` for `tsc`) — it needs an
 ambient `.d.ts` declaration under option (a)/(b). This batch is large enough
 to reasonably split across more than one session — lib first (done),
 App.jsx later (not started).
+
+**Session 2 (2026-07-22): `App.jsx` → `App.tsx`, `Charts.jsx` → `Charts.tsx`
+finished, closing out option (b) fully.** `git mv`'d both, then typed every
+component prop, `useState`/`useRef` generic and event handler — worked from a
+raw `tsc --noEmit` baseline (955 errors in App.tsx, 142 in Charts.tsx) down to
+zero, in passes: type the top-level state/domain shapes first (cascades
+through dozens of downstream inference errors per fix), then clean up
+whatever `tsc` still flags. `lib/storage.js` also got swept into `.ts` mid-way
+— it was untyped and every `storage.get/set/delete(key, false)` call site (a
+harmless vestigial second argument, ~20 of them) was erroring as "too many
+arguments" against its JS-inferred signature; typing `storage.ts` with an
+explicit `...rest: unknown[]` in each method's signature fixed all of them in
+one pass rather than touching every call site.
+
+Two type-collapse traps worth knowing (see CLAUDE.md § Type safety for the
+full writeup): intersecting a type with an already-declared property (e.g.
+`Trade & { screenshots: ShotDraft[] }` where `Trade.screenshots?: unknown[]`)
+collapses to something unusable — `Omit<Trade, "screenshots"> & {...}` is the
+fix. And `num()`/`round()` in `format.ts` picked up overloads so a literal
+numeric fallback (`num(x, 0)`) narrows to `number` instead of `number | null`
+— high-leverage, since dozens of call sites use that exact pattern.
+
+A handful of genuinely dynamic spots (a per-field form setter keyed by a
+runtime string union, Recharts' custom render-prop callbacks) stayed on a
+local `type Any = any` alias rather than being forced into precise types —
+same pragmatic-boundary stance as `lib/trade.ts`'s coercion functions, named
+so it reads as deliberate.
+
+**Final accept:** `tsc --noEmit` clean across the whole `src/` (only
+`main.jsx` and the four test files stay plain JS, via `allowJs`), `npm run
+lint` clean, 248/248 tests, `npm run build` still code-splits `Charts.tsx`
+into its own chunk, and a live browser pass (Dashboard, Analytics — every
+chart type renders — and the trade form, the most complex typed component)
+showed no visual or console regressions.
 
 ---
 

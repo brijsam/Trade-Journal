@@ -1,4 +1,8 @@
-import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense, createContext, useContext, Component } from "react";
+import {
+  useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense, createContext, useContext, Component,
+  type ReactNode, type Dispatch, type SetStateAction, type ChangeEvent, type FormEvent, type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent, type CSSProperties, type RefObject,
+} from "react";
 // flushSync only wraps tab-switch state updates inside document.startViewTransition,
 // which needs the DOM updated synchronously inside its callback to snapshot it.
 import { flushSync } from "react-dom";
@@ -14,7 +18,8 @@ import {
   AlertTriangle, Save, RotateCcw, Flame, Snowflake, ChevronLeft, ChevronRight,
   FileSpreadsheet, FileText, Database, ShieldCheck, Calculator, Plus, Check, Loader2,
   Copy, ListPlus, ArrowLeft, ArrowRight, PanelLeftClose, PanelLeftOpen, Layers, Wallet, Keyboard, Table2, BookOpen,
-  ArrowDownCircle, ArrowUpCircle, LogIn, LogOut, UserPlus, Lock, Users, Eye, EyeOff, LifeBuoy, ArrowRightLeft
+  ArrowDownCircle, ArrowUpCircle, LogIn, LogOut, UserPlus, Lock, Users, Eye, EyeOff, LifeBuoy, ArrowRightLeft,
+  type LucideIcon,
 } from "lucide-react";
 import { storage } from "./lib/storage";
 import {
@@ -37,8 +42,11 @@ import {
   summarize, equityCurve, maxDrawdown, consecutiveStreaks, sharpeSortino,
   emptyTrade, emptyLeg, withDerivedFills, tradeToForm, formSignature, tradeWarnings, PAGE_SIZES, DEFAULT_TABLE_SORT,
   normalizeTransactions, transactionsNet, filterTransactions, sortedTransactions,
+  type Trade, type ComputedTrade, type Settings, type Preferences, type Account, type Transaction,
+  type FillLeg, type Filters, type TableSort, type DateRange, type JournalGrain, type JournalEntry,
+  type SummaryStats, type EquityPoint, type PerformanceRow, type Goals,
 } from "./lib/trade";
-import { normalizeUsers, findUser, makeUser, verifyPassword } from "./lib/auth";
+import { normalizeUsers, findUser, makeUser, verifyPassword, type AuthUser } from "./lib/auth";
 
 /* ============================================================================
    JOURNAL TIMEZONE
@@ -47,6 +55,14 @@ import { normalizeUsers, findUser, makeUser, verifyPassword } from "./lib/auth";
    "follow the machine's zone" — it is also what the component tests get, since
    they render without the provider, which keeps them on legacy behaviour.
 ============================================================================ */
+// A handful of spots below are genuinely dynamic in a way a precise type would
+// only paper over with casts (a generic field setter keyed by a string union
+// of a huge form shape, a DOM event whose target varies by call site). Same
+// boundary-typing stance as lib/trade.ts's coercion functions: named `Any`
+// rather than bare `any` so it reads as a deliberate choice, not a miss.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Any = any;
+
 const TimezoneContext = createContext("");
 const useJournalTz = () => useContext(TimezoneContext);
 // Full IANA list where the runtime offers it (Chromium and Node both do); the
@@ -740,12 +756,13 @@ const BOOT_ERROR_THEME_CSS = `.app-root { ${Object.entries(TOKENS_DARK).map(([k,
 // render-time throws anywhere below it; does not touch storage or trades, so
 // a render bug never masquerades as a data-loss bug the way a swallowed
 // loadError would.
-export class ErrorBoundary extends Component {
-  state = { error: null };
-  static getDerivedStateFromError(error) {
+interface ErrorBoundaryState { error: Error | null; }
+export class ErrorBoundary extends Component<{ children?: ReactNode }, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { error: null };
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
     return { error };
   }
-  componentDidCatch(error, info) {
+  componentDidCatch(error: Error, info: { componentStack?: string | null }) {
     console.error("Render error caught by ErrorBoundary:", error, info.componentStack);
   }
   render() {
@@ -785,15 +802,27 @@ const NAV_HISTORY_MAX = 50;
 // no red — those two mean P&L and nothing else, everywhere in the app.
 const ACCENT_PRESETS = ["#3e8fff", "#8b5cf6", "#06b6d4", "#c9a84c", "#f97316", "#ec4899", "#94a3b8"];
 
-function readImageAsDataUrl(file) {
+// A screenshot attached to a trade — App.jsx's own shape (id/stage/dataUrl are
+// never on the stored Trade itself, see SHOTS_PREFIX in ARCHITECTURE.md). The
+// form and detail/lightbox views all pass these around, so it's shared here.
+interface ShotDraft { id: string; name: string; stage: string; dataUrl: string; }
+// The form edits a Trade whose screenshots are always this concrete shape,
+// narrower than lib/trade.ts's Trade.screenshots?: unknown[] (which stays
+// loose because storage/import never guarantees shot shape up front). Omit
+// first: intersecting a same-named property instead of replacing it collapses
+// to an unhelpful type (TS merges the two screenshots types rather than one
+// overriding the other) — see lib/trade.ts's formSignature for the same fix.
+type FormTrade = Omit<Trade, "screenshots"> & { screenshots: ShotDraft[] };
+
+function readImageAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error("Could not read file"));
-    reader.onload = () => resolve(reader.result);
+    reader.onload = () => resolve(reader.result as string);
     reader.readAsDataURL(file);
   });
 }
-function compressImage(file, maxW = 900, quality = 0.58) {
+function compressImage(file: File, maxW = 900, quality = 0.58): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error("Could not read file"));
@@ -805,21 +834,21 @@ function compressImage(file, maxW = 900, quality = 0.58) {
         if (width > maxW) { height = Math.round((height * maxW) / width); width = maxW; }
         const canvas = document.createElement("canvas");
         canvas.width = width; canvas.height = height;
-        const ctx = canvas.getContext("2d");
+        const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
         ctx.drawImage(img, 0, 0, width, height);
         resolve(canvas.toDataURL("image/jpeg", quality));
       };
-      img.src = reader.result;
+      img.src = reader.result as string;
     };
     reader.readAsDataURL(file);
   });
 }
-function downloadDataUrl(dataUrl, filename) {
+function downloadDataUrl(dataUrl: string, filename: string): void {
   const a = document.createElement("a");
   a.href = dataUrl; a.download = filename;
   document.body.appendChild(a); a.click(); a.remove();
 }
-function downloadBlob(blob, filename) {
+function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   downloadDataUrl(url, filename);
   setTimeout(() => URL.revokeObjectURL(url), 5000);
@@ -838,19 +867,19 @@ const desktop = typeof window !== "undefined" ? window.desktopExport : null;
 
 // Convert a base64 string to a Blob without a data: URL round-trip, for the
 // web fallback when saving binary (xlsx) exports.
-function base64ToBlob(base64, mime) {
+function base64ToBlob(base64: string, mime: string): Blob {
   const bytes = atob(base64);
   const arr = new Uint8Array(bytes.length);
   for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
   return new Blob([arr], { type: mime });
 }
 
-async function saveTextExport(filename, content, mime = "text/plain") {
+async function saveTextExport(filename: string, content: string, mime = "text/plain"): Promise<ExportResult> {
   if (desktop?.isElectron) return desktop.saveText(filename, content);
   downloadBlob(new Blob([content], { type: mime }), filename);
   return { ok: true };
 }
-async function saveBinaryExport(filename, base64, mime) {
+async function saveBinaryExport(filename: string, base64: string, mime: string): Promise<ExportResult> {
   if (desktop?.isElectron) return desktop.saveBinary(filename, base64);
   downloadBlob(base64ToBlob(base64, mime), filename);
   return { ok: true };
@@ -859,16 +888,17 @@ async function saveBinaryExport(filename, base64, mime) {
 // Web-only PDF path: render the report HTML in an offscreen iframe and invoke
 // the browser's print dialog, where the user picks "Save as PDF". The desktop
 // build skips this and prints to a real PDF through the main process instead.
-function printHtmlViaBrowser(html) {
+function printHtmlViaBrowser(html: string): void {
   const iframe = document.createElement("iframe");
   iframe.setAttribute("aria-hidden", "true");
   Object.assign(iframe.style, { position: "fixed", right: "0", bottom: "0", width: "0", height: "0", border: "0" });
   document.body.appendChild(iframe);
-  const doc = iframe.contentWindow.document;
+  const win = iframe.contentWindow as Window;
+  const doc = win.document;
   doc.open(); doc.write(html); doc.close();
   // Data-URL screenshots are inline, so a short settle is enough for layout.
   setTimeout(() => {
-    try { iframe.contentWindow.focus(); iframe.contentWindow.print(); }
+    try { win.focus(); win.print(); }
     finally { setTimeout(() => iframe.remove(), 1000); }
   }, 400);
 }
@@ -876,14 +906,14 @@ function printHtmlViaBrowser(html) {
 /* ============================================================================
    SMALL PRESENTATIONAL PRIMITIVES
 ============================================================================ */
-function PnlText({ value, percent = false, digits = 2 }) {
+function PnlText({ value, percent = false, digits = 2 }: { value: number | null | undefined; percent?: boolean; digits?: number }) {
   if (value === null || value === undefined || Number.isNaN(value)) return <span className="mono" style={{ color: "var(--text-muted)" }}>—</span>;
   const positive = value > 0, negative = value < 0;
   const color = positive ? "var(--profit)" : negative ? "var(--loss)" : "var(--text-secondary)";
   const text = percent ? fmtPercent(value, digits) : fmtCurrency(value);
   return <span className="mono" style={{ color, fontWeight: 600 }}>{positive ? "+" : ""}{text}</span>;
 }
-function Card({ label, value, icon: Icon, sub, accentColor, help }) {
+function Card({ label, value, icon: Icon, sub, accentColor, help }: { label: ReactNode; value: ReactNode; icon?: LucideIcon; sub?: ReactNode; accentColor?: string; help?: string }) {
   return (
     <div className="stat-card">
       <div className="stat-card-top">
@@ -898,7 +928,7 @@ function Card({ label, value, icon: Icon, sub, accentColor, help }) {
     </div>
   );
 }
-function Badge({ children, tone = "neutral" }) { return <span className={`badge badge-${tone}`}>{children}</span>; }
+function Badge({ children, tone = "neutral" }: { children: ReactNode; tone?: string }) { return <span className={`badge badge-${tone}`}>{children}</span>; }
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 /* Shared, reference-counted body-scroll lock. The command palette is designed
    to open on top of any modal (see .palette-overlay's z-index below it isn't
@@ -943,8 +973,8 @@ function useOpenDialogCount() {
     return () => { openDialogCount--; };
   }, []);
 }
-function Modal({ title, onClose, children, wide }) {
-  const panelRef = useRef(null);
+function Modal({ title, onClose, children, wide }: { title: ReactNode; onClose: () => void; children: ReactNode; wide?: boolean }) {
+  const panelRef = useRef<HTMLDivElement>(null);
   useBodyScrollLock();
   useOpenDialogCount();
   // Hold focus inside the dialog. Without this, Tab walks off into the page
@@ -954,9 +984,9 @@ function Modal({ title, onClose, children, wide }) {
     // Anything with its own autoFocus has already claimed focus by now; only
     // take it if nothing inside the dialog has it.
     if (!panelRef.current?.contains(document.activeElement)) panelRef.current?.focus();
-    const onKeyDown = (e) => {
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
       if (e.key !== "Tab" || !panelRef.current) return;
-      const items = panelRef.current.querySelectorAll(FOCUSABLE);
+      const items = panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE);
       if (!items.length) return;
       const first = items[0], last = items[items.length - 1];
       if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
@@ -970,14 +1000,14 @@ function Modal({ title, onClose, children, wide }) {
   }, []);
   return (
     <div className="modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={`modal-panel ${wide ? "modal-wide" : ""}`} ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title}>
+      <div className={`modal-panel ${wide ? "modal-wide" : ""}`} ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined}>
         <div className="modal-header"><h3>{title}</h3><button className="icon-btn" onClick={onClose} aria-label="Close"><X size={18} /></button></div>
         <div className="modal-body">{children}</div>
       </div>
     </div>
   );
 }
-function ConfirmModal({ title, message, confirmLabel = "Confirm", danger, onConfirm, onClose }) {
+function ConfirmModal({ title, message, confirmLabel = "Confirm", danger, onConfirm, onClose }: { title: ReactNode; message: ReactNode; confirmLabel?: string; danger?: boolean; onConfirm: () => void; onClose: () => void }) {
   return (
     <Modal title={title} onClose={onClose}>
       <p className="confirm-msg">{message}</p>
@@ -988,12 +1018,12 @@ function ConfirmModal({ title, message, confirmLabel = "Confirm", danger, onConf
     </Modal>
   );
 }
-function Field({ label, children, span }) {
+function Field({ label, children, span }: { label: ReactNode; children: ReactNode; span?: boolean }) {
   return <label className={`field ${span ? "field-span" : ""}`}><span className="field-label">{label}</span>{children}</label>;
 }
 /* Whole-panel zero state: what this place will hold, and the shortest path to
    putting something in it. */
-function EmptyState({ icon: Icon = Activity, title, message, actionLabel, onAction }) {
+function EmptyState({ icon: Icon = Activity, title, message, actionLabel, onAction }: { icon?: LucideIcon; title?: ReactNode; message: ReactNode; actionLabel?: string; onAction?: () => void }) {
   return (
     <div className="empty-state empty-state-lg">
       <Icon size={30} />
@@ -1007,7 +1037,11 @@ function EmptyState({ icon: Icon = Activity, title, message, actionLabel, onActi
 /* One side of a scaled trade's fill legs — the rows the average entry or exit is
    built from. A <div> rather than a <label> like Field: several inputs per row
    means there is nothing for a single label to point at. */
-function LegEditor({ side, label, legs = [], fill, onAdd, onChange, onRemove, emptyHint }) {
+function LegEditor({ side, label, legs = [], fill, onAdd, onChange, onRemove, emptyHint }: {
+  side: "entries" | "exits"; label: ReactNode; legs?: FillLeg[]; fill?: { qty: number; avgPrice: number } | null;
+  onAdd: () => void; onChange: (side: "entries" | "exits", id: string, field: keyof FillLeg) => (e: ChangeEvent<HTMLInputElement> | string) => void;
+  onRemove: (side: "entries" | "exits", id: string) => void; emptyHint?: string;
+}) {
   return (
     <div className="field field-span">
       <span className="field-label">{label}</span>
@@ -1047,12 +1081,12 @@ function LegEditor({ side, label, legs = [], fill, onAdd, onChange, onRemove, em
    upload a photo/logo; it's compressed client-side and stored in settings,
    so it persists the same way the rest of the app's settings do.
 ============================================================================ */
-function ProfileMark({ size = 30, settings, setSettings }) {
-  const fileRef = useRef(null);
+function ProfileMark({ size = 30, settings, setSettings }: { size?: number; settings: Settings; setSettings: Dispatch<SetStateAction<Settings>> }) {
+  const fileRef = useRef<HTMLInputElement>(null);
   const [hover, setHover] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const onFile = async (e) => {
+  const onFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
@@ -1064,7 +1098,7 @@ function ProfileMark({ size = 30, settings, setSettings }) {
       setSettings((s) => ({ ...s, profileImage: dataUrl }));
     } catch { /* ignore unreadable image */ } finally { setBusy(false); }
   };
-  const removeImage = (e) => {
+  const removeImage = (e: ReactMouseEvent) => {
     e.stopPropagation();
     setSettings((s) => ({ ...s, profileImage: null }));
   };
@@ -1094,8 +1128,9 @@ function ProfileMark({ size = 30, settings, setSettings }) {
 /* ============================================================================
    TICKER STRIP — signature element
 ============================================================================ */
-function TickerStrip({ items }) {
-  const row = (it, i, cloned) => (
+interface TickerItem { label: string; value: ReactNode; color?: string; }
+function TickerStrip({ items }: { items: TickerItem[] }) {
+  const row = (it: TickerItem, i: number, cloned: boolean) => (
     <div className="ticker-item" key={`${cloned ? "clone" : "real"}-${i}`}>
       <span className="ticker-key">{it.label}</span>
       <span className="mono ticker-val" style={{ color: it.color || "var(--text-primary)" }}>{it.value}</span>
@@ -1116,7 +1151,7 @@ function TickerStrip({ items }) {
 /* ============================================================================
    CUSTOM DATE & TIME PICKER — with explicit Confirm button
 ============================================================================ */
-function DTCalendar({ cursor, setCursor, selectedDate, onPick }) {
+function DTCalendar({ cursor, setCursor, selectedDate, onPick }: { cursor: Date; setCursor: Dispatch<SetStateAction<Date>>; selectedDate: Date | null; onPick: (d: Date) => void }) {
   // One zoned read per render, not one per cell — 31 Intl lookups per paint
   // would be pure waste for a value every cell shares.
   const today = zonedNow(useJournalTz());
@@ -1124,7 +1159,7 @@ function DTCalendar({ cursor, setCursor, selectedDate, onPick }) {
   const first = new Date(year, month, 1);
   const startDow = first.getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const cells = [];
+  const cells: (number | null)[] = [];
   for (let i = 0; i < startDow; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
   return (
@@ -1146,15 +1181,15 @@ function DTCalendar({ cursor, setCursor, selectedDate, onPick }) {
     </div>
   );
 }
-function DateTimePicker({ value, onChange, required, disabled = false }) {
+function DateTimePicker({ value, onChange, required, disabled = false }: { value: string; onChange: (v: string) => void; required?: boolean; disabled?: boolean }) {
   const tz = useJournalTz();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(() => (value ? parseLocalInputValue(value) : zonedNow(tz)));
   const [cursor, setCursor] = useState(() => (value ? parseLocalInputValue(value) : zonedNow(tz)));
-  const ref = useRef(null);
+  const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    function onDocClick(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    function onDocClick(e: globalThis.MouseEvent) { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); }
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
@@ -1166,9 +1201,9 @@ function DateTimePicker({ value, onChange, required, disabled = false }) {
     setOpen((o) => !o);
   };
 
-  const pickDay = (d) => { const next = new Date(d); next.setHours(draft.getHours(), draft.getMinutes()); setDraft(next); setCursor(next); };
-  const setHour = (h) => setDraft((d) => { const n = new Date(d); n.setHours(h); return n; });
-  const setMinute = (m) => setDraft((d) => { const n = new Date(d); n.setMinutes(m); return n; });
+  const pickDay = (d: Date) => { const next = new Date(d); next.setHours(draft.getHours(), draft.getMinutes()); setDraft(next); setCursor(next); };
+  const setHour = (h: number) => setDraft((d) => { const n = new Date(d); n.setHours(h); return n; });
+  const setMinute = (m: number) => setDraft((d) => { const n = new Date(d); n.setMinutes(m); return n; });
   const confirm = () => { onChange(toLocalInputValue(draft)); setOpen(false); };
   const setNow = () => { const n = zonedNow(tz); setDraft(n); setCursor(n); };
 
@@ -1208,9 +1243,9 @@ function DateTimePicker({ value, onChange, required, disabled = false }) {
 /* ============================================================================
    STRATEGY MANAGER
 ============================================================================ */
-function StrategyManager({ strategies, setStrategies, onClose }) {
+function StrategyManager({ strategies, setStrategies, onClose }: { strategies: string[]; setStrategies: Dispatch<SetStateAction<string[]>>; onClose: () => void }) {
   const [newName, setNewName] = useState("");
-  const [editIdx, setEditIdx] = useState(null);
+  const [editIdx, setEditIdx] = useState<number | null>(null);
   const [editVal, setEditVal] = useState("");
 
   const add = () => {
@@ -1219,15 +1254,15 @@ function StrategyManager({ strategies, setStrategies, onClose }) {
     setStrategies((s) => [...s, v]);
     setNewName("");
   };
-  const startEdit = (i) => { setEditIdx(i); setEditVal(strategies[i]); };
+  const startEdit = (i: number) => { setEditIdx(i); setEditVal(strategies[i]); };
   const saveEdit = () => {
     const v = editVal.trim();
     if (!v) return;
     setStrategies((s) => s.map((x, i) => (i === editIdx ? v : x)));
     setEditIdx(null);
   };
-  const [removeIdx, setRemoveIdx] = useState(null);
-  const remove = (i) => setStrategies((s) => s.filter((_, idx) => idx !== i));
+  const [removeIdx, setRemoveIdx] = useState<number | null>(null);
+  const remove = (i: number) => setStrategies((s) => s.filter((_, idx) => idx !== i));
 
   return (
     <Modal title="Manage Strategies" onClose={onClose}>
@@ -1272,8 +1307,23 @@ function StrategyManager({ strategies, setStrategies, onClose }) {
 ============================================================================ */
 // Exported for the component smoke tests (App.test.jsx) — App itself is still
 // the only intended consumer.
-export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrategies, lastDefaults, symbolStats = [], existingTags = [], checklistRules = DEFAULT_CHECKLIST_RULES, accounts = DEFAULT_SETTINGS.accounts, defaultAccountId }) {
-  const [form, setForm] = useState(() => tradeToForm(initial || seed || emptyTrade({ ...lastDefaults, accountId: defaultAccountId || lastDefaults?.accountId }), accounts));
+interface SymbolStat { symbol: string; count: number; }
+interface TradeFormProps {
+  initial?: (Partial<ComputedTrade> & { screenshots?: ShotDraft[]; _loadingShots?: boolean }) | null;
+  seed?: Partial<Trade> | null;
+  onSave: (trade: FormTrade) => void;
+  onClose: () => void;
+  strategies: string[];
+  setStrategies: Dispatch<SetStateAction<string[]>>;
+  lastDefaults?: Record<string, unknown>;
+  symbolStats?: SymbolStat[];
+  existingTags?: string[];
+  checklistRules?: string[];
+  accounts?: Account[];
+  defaultAccountId?: string;
+}
+export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrategies, lastDefaults, symbolStats = [], existingTags = [], checklistRules = DEFAULT_CHECKLIST_RULES, accounts = DEFAULT_SETTINGS.accounts, defaultAccountId }: TradeFormProps) {
+  const [form, setForm] = useState<FormTrade>(() => tradeToForm(initial || seed || emptyTrade({ ...lastDefaults, accountId: defaultAccountId || (lastDefaults?.accountId as string) }), accounts) as FormTrade);
   const [sizeDriver, setSizeDriver] = useState(form.positionSize && !form.riskAmount ? "size" : "risk");
   // Scaled mode is a property of the trade, not a preference: a trade with legs
   // on file opens in the leg editor, anything else opens as a single fill.
@@ -1283,7 +1333,7 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
   const [showStrategyMgr, setShowStrategyMgr] = useState(false);
   const [symbolFocus, setSymbolFocus] = useState(false);
   const [symbolIdx, setSymbolIdx] = useState(-1);
-  const fileRef = useRef(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const [pendingStage, setPendingStage] = useState("Before Entry");
   // Opt-in downscale for attachments (longest edge 1600px, jpeg 0.8) — full
   // quality stays the default. All of a trade's images share one storage key,
@@ -1299,7 +1349,7 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
   // load isn't mistaken for a user edit either.
   const pristine = useRef(formSignature(form));
 
-  useEffect(() => { if (initial) { const next = tradeToForm(initial, accounts); setForm(next); pristine.current = formSignature(next); } }, [initial?.screenshots]); // eslint-disable-line
+  useEffect(() => { if (initial) { const next = tradeToForm(initial, accounts) as FormTrade; setForm(next); pristine.current = formSignature(next); } }, [initial?.screenshots]); // eslint-disable-line
 
   const requestClose = useCallback(() => {
     if (formSignature(form) !== pristine.current) setConfirmDiscard(true);
@@ -1315,7 +1365,7 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
   // This form owns Escape while it is open (App defers to it) so that closing
   // always runs through the unsaved-changes guard above.
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") requestCloseRef.current(); };
+    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === "Escape") requestCloseRef.current(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
@@ -1330,18 +1380,18 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
   // the save: a stop moved to lock in profit sits "wrong side" on purpose.
   const warnings = useMemo(() => tradeWarnings(form), [form]);
 
-  const set = (k) => (e) => {
+  const set = (k: keyof FormTrade) => (e: Any) => {
     const v = e && e.target ? e.target.value : e;
     setForm((f) => ({ ...f, [k]: v }));
   };
-  const addTag = (raw) => {
+  const addTag = (raw: string) => {
     const tag = raw.trim();
     if (!tag) return;
     setForm((f) => (f.tags?.includes(tag) ? f : { ...f, tags: [...(f.tags || []), tag] }));
     setTagInput("");
   };
-  const removeTag = (tag) => setForm((f) => ({ ...f, tags: (f.tags || []).filter((t) => t !== tag) }));
-  const toggleChecklistRule = (rule) => setForm((f) => ({ ...f, checklist: { ...f.checklist, [rule]: !f.checklist?.[rule] } }));
+  const removeTag = (tag: string) => setForm((f) => ({ ...f, tags: (f.tags || []).filter((t) => t !== tag) }));
+  const toggleChecklistRule = (rule: string) => setForm((f) => ({ ...f, checklist: { ...f.checklist, [rule]: !f.checklist?.[rule] } }));
   const symbolSuggestions = useMemo(() => {
     const q = (form.symbol || "").trim().toLowerCase();
     return symbolStats
@@ -1350,11 +1400,11 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
       .slice(0, 8);
   }, [form.symbol, symbolStats]);
   const symbolMenuOpen = symbolFocus && symbolSuggestions.length > 0;
-  const pickSymbol = (symbol) => { setForm((f) => ({ ...f, symbol })); setSymbolFocus(false); setSymbolIdx(-1); };
+  const pickSymbol = (symbol: string) => { setForm((f) => ({ ...f, symbol })); setSymbolFocus(false); setSymbolIdx(-1); };
   // The form-level Enter handler advances to the next field, which would other-
   // wise fire instead of accepting the highlighted suggestion — so these keys
   // stop propagating once the menu has consumed them.
-  const onSymbolKeyDown = (e) => {
+  const onSymbolKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (!symbolMenuOpen) return;
     if (e.key === "ArrowDown") { e.preventDefault(); setSymbolIdx((i) => (i + 1) % symbolSuggestions.length); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setSymbolIdx((i) => (i <= 0 ? symbolSuggestions.length - 1 : i - 1)); }
@@ -1362,7 +1412,7 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
     else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setSymbolFocus(false); setSymbolIdx(-1); }
   };
 
-  const onPriceOrStopChange = (key) => (e) => {
+  const onPriceOrStopChange = (key: "entryPrice" | "stopLoss") => (e: ChangeEvent<HTMLInputElement>) => {
     const v = e.target.value;
     setForm((f) => {
       const next = { ...f, [key]: v };
@@ -1382,18 +1432,18 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
   };
 
   /* ---- fill legs ---- */
-  const addLeg = (side) => setForm((f) => withDerivedFills({ ...f, [side]: [...(f[side] || []), emptyLeg()] }));
-  const setLeg = (side, id, key) => (e) => {
+  const addLeg = (side: "entries" | "exits") => setForm((f) => withDerivedFills({ ...f, [side]: [...(f[side] || []), emptyLeg()] }) as FormTrade);
+  const setLeg = (side: "entries" | "exits", id: string, key: keyof FillLeg) => (e: Any) => {
     const v = e && e.target ? e.target.value : e;
-    setForm((f) => withDerivedFills({ ...f, [side]: (f[side] || []).map((l) => (l.id === id ? { ...l, [key]: v } : l)) }));
+    setForm((f) => withDerivedFills({ ...f, [side]: (f[side] || []).map((l) => (l.id === id ? { ...l, [key]: v } : l)) }) as FormTrade);
   };
-  const removeLeg = (side, id) => setForm((f) => withDerivedFills({ ...f, [side]: (f[side] || []).filter((l) => l.id !== id) }));
+  const removeLeg = (side: "entries" | "exits", id: string) => setForm((f) => withDerivedFills({ ...f, [side]: (f[side] || []).filter((l) => l.id !== id) }) as FormTrade);
 
   /* Switching modes never throws a number away. Going scaled seeds the first leg
      from what the single-fill fields already say, so the trade means the same
      thing the instant it converts; coming back collapses the legs into the
      averages they represent, which is what the flat fields already mirror. */
-  const toggleScaled = (on) => {
+  const toggleScaled = (on: boolean) => {
     if (on === scaled) return;
     setScaled(on);
     if (on) {
@@ -1402,36 +1452,36 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
           ? [{ ...emptyLeg(), price: f.entryPrice, qty: f.positionSize, datetime: f.entryDateTime }] : [emptyLeg()]);
         const exits = f.exits?.length ? f.exits : (f.exitPrice || f.exitDateTime
           ? [{ ...emptyLeg(), price: f.exitPrice, qty: f.positionSize, datetime: f.exitDateTime }] : []);
-        return withDerivedFills({ ...f, entries, exits });
+        return withDerivedFills({ ...f, entries, exits }) as FormTrade;
       });
     } else {
-      setForm((f) => ({ ...withDerivedFills(f), entries: [], exits: [] }));
+      setForm((f) => ({ ...withDerivedFills(f), entries: [], exits: [] }) as FormTrade);
     }
   };
   const entryFill = useMemo(() => aggregateLegs(form.entries), [form.entries]);
   const exitFill = useMemo(() => aggregateLegs(form.exits), [form.exits]);
   const openQty = entryFill && exitFill ? entryFill.qty - exitFill.qty : null;
   const feesTotal = (num(form.commission, 0) || 0) + (num(form.swap, 0) || 0);
-  const onRiskChange = (e) => {
+  const onRiskChange = (e: ChangeEvent<HTMLInputElement>) => {
     const v = e.target.value;
     setSizeDriver("risk");
     setForm((f) => {
       const next = { ...f, riskAmount: v };
-      if (stopDistance && v !== "") next.positionSize = String(round(num(v, 0) / stopDistance, 6));
+      if (stopDistance && v !== "") next.positionSize = String(round(num(v, 0) as number / stopDistance, 6));
       return next;
     });
   };
-  const onSizeChange = (e) => {
+  const onSizeChange = (e: ChangeEvent<HTMLInputElement>) => {
     const v = e.target.value;
     setSizeDriver("size");
     setForm((f) => {
       const next = { ...f, positionSize: v };
-      if (stopDistance && v !== "") next.riskAmount = String(round(num(v, 0) * stopDistance, 2));
+      if (stopDistance && v !== "") next.riskAmount = String(round(num(v, 0) as number * stopDistance, 2));
       return next;
     });
   };
 
-  const handleFiles = async (fileList) => {
+  const handleFiles = async (fileList: FileList | File[] | null) => {
     setErr("");
     const files = Array.from(fileList || []);
     const okTypes = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
@@ -1444,16 +1494,16 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
       } catch { setErr("Could not process image: " + file.name); } finally { setBusy(false); }
     }
   };
-  const removeShot = (id) => setForm((f) => ({ ...f, screenshots: f.screenshots.filter((s) => s.id !== id) }));
+  const removeShot = (id: string) => setForm((f) => ({ ...f, screenshots: f.screenshots.filter((s) => s.id !== id) }));
 
   // Let the user paste a screenshot straight from the clipboard (Ctrl+V / Cmd+V)
   // anywhere in this form, instead of only via the file picker.
   useEffect(() => {
-    const onPaste = (e) => {
+    const onPaste = (e: ClipboardEvent) => {
       if (initial?._loadingShots) return; // avoid a race with the async screenshot fetch for an existing trade
       const items = e.clipboardData?.items;
       if (!items) return;
-      const files = [];
+      const files: File[] = [];
       for (let i = 0; i < items.length; i++) {
         const it = items[i];
         if (it.kind === "file" && it.type.startsWith("image/")) {
@@ -1495,17 +1545,18 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
     setErr("");
     // fees stays the total of record; commission and swap are what was typed.
     // Written on every save so the two can never drift apart on disk.
-    const next = withDerivedFills({ ...form, fees: String(round(feesTotal, 8)) });
+    const next = withDerivedFills({ ...form, fees: String(round(feesTotal, 8)) }) as FormTrade;
     onSave(scaled ? next : { ...next, entries: [], exits: [] });
   };
 
-  const handleFormKeyDown = (e) => {
+  const handleFormKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== "Enter") return;
-    const tag = e.target.tagName.toLowerCase();
+    const target = e.target as HTMLElement;
+    const tag = target.tagName.toLowerCase();
     if (tag === "textarea" || tag === "button") return;
     e.preventDefault();
-    const focusable = Array.from(e.currentTarget.querySelectorAll("input.input, select.input"));
-    const idx = focusable.indexOf(e.target);
+    const focusable = Array.from(e.currentTarget.querySelectorAll<HTMLElement>("input.input, select.input"));
+    const idx = focusable.indexOf(target);
     if (idx > -1 && idx < focusable.length - 1) focusable[idx + 1].focus(); else submit();
   };
 
@@ -1600,7 +1651,7 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
                   <div><span className="field-label">Size In / Out</span><div className="mono readout-val">{entryFill ? fmtNum(entryFill.qty, 4) : "—"} / {exitFill ? fmtNum(exitFill.qty, 4) : "—"}</div></div>
                   <div>
                     <span className="field-label">Still Open</span>
-                    <div className="mono readout-val" style={{ color: openQty > 1e-9 ? "var(--accent)" : undefined }}>
+                    <div className="mono readout-val" style={{ color: openQty !== null && openQty > 1e-9 ? "var(--accent)" : undefined }}>
                       {openQty === null ? "—" : fmtNum(Math.max(0, openQty), 4)}
                     </div>
                   </div>
@@ -1608,7 +1659,7 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
                 {openQty !== null && openQty < -1e-9 && (
                   <p className="hint" style={{ color: "var(--loss)" }}><AlertTriangle size={12} /> Exit fills total more than the entry fills.</p>
                 )}
-                {openQty > 1e-9 && (
+                {openQty !== null && openQty > 1e-9 && exitFill && (
                   <p className="hint">Partial close — P&amp;L is realized on the {fmtNum(exitFill.qty, 4)} that has been closed out. The rest stays open.</p>
                 )}
               </div>
@@ -1787,12 +1838,12 @@ export function TradeForm({ initial, seed, onSave, onClose, strategies, setStrat
 /* ============================================================================
    IMAGE LIGHTBOX
 ============================================================================ */
-function ImageLightbox({ shots, startIndex, onClose }) {
+function ImageLightbox({ shots, startIndex, onClose }: { shots: ShotDraft[]; startIndex?: number; onClose: () => void }) {
   const [idx, setIdx] = useState(startIndex || 0);
   const total = shots.length;
-  const panelRef = useRef(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const onKey = (e) => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key === "Escape") onClose();
       if (e.key === "ArrowRight") setIdx((i) => Math.min(i + 1, total - 1));
       if (e.key === "ArrowLeft") setIdx((i) => Math.max(i - 1, 0));
@@ -1806,9 +1857,9 @@ function ImageLightbox({ shots, startIndex, onClose }) {
   useEffect(() => {
     const previouslyFocused = document.activeElement;
     if (!panelRef.current?.contains(document.activeElement)) panelRef.current?.focus();
-    const onKeyDown = (e) => {
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
       if (e.key !== "Tab" || !panelRef.current) return;
-      const items = panelRef.current.querySelectorAll(FOCUSABLE);
+      const items = panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE);
       if (!items.length) { e.preventDefault(); return; }
       const first = items[0], last = items[items.length - 1];
       if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
@@ -1846,9 +1897,9 @@ function ImageLightbox({ shots, startIndex, onClose }) {
 /* ============================================================================
    TRADE DETAIL
 ============================================================================ */
-function TradeDetail({ trade, onClose, onEdit, onDelete, onCopy }) {
-  const t = computeTrade(trade);
-  const [lightboxIdx, setLightboxIdx] = useState(null);
+function TradeDetail({ trade, onClose, onEdit, onDelete, onCopy }: { trade: Partial<ComputedTrade> & { screenshots?: ShotDraft[]; _loadingShots?: boolean }; onClose: () => void; onEdit: (t: ComputedTrade) => void; onDelete: (id: string) => void; onCopy: (t: ComputedTrade) => void }) {
+  const t = computeTrade(trade as Trade) as Omit<ComputedTrade, "screenshots"> & { screenshots?: ShotDraft[] };
+  const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
   const closeLightbox = useCallback(() => setLightboxIdx(null), []);
   const checkedRules = Object.entries(t.checklist || {}).filter(([, v]) => v).map(([k]) => k);
   return (
@@ -1894,7 +1945,7 @@ function TradeDetail({ trade, onClose, onEdit, onDelete, onCopy }) {
             <table className="trades-table compact-table">
               <thead><tr><th>Side</th><th>#</th><th>Price</th><th>Quantity</th><th>Time</th></tr></thead>
               <tbody>
-                {[["Entry", t.entries], ["Exit", t.exits]].flatMap(([sideLabel, legs]) => (legs || []).map((leg, i) => (
+                {([["Entry", t.entries], ["Exit", t.exits]] as [string, FillLeg[]][]).flatMap(([sideLabel, legs]) => (legs || []).map((leg, i) => (
                   <tr key={`${sideLabel}-${leg.id || i}`}>
                     <td><Badge tone={sideLabel === "Entry" ? "accent" : "neutral"}>{sideLabel}</Badge></td>
                     <td className="mono muted">{i + 1}</td>
@@ -1916,11 +1967,11 @@ function TradeDetail({ trade, onClose, onEdit, onDelete, onCopy }) {
       )}
       {t.notes && <div className="detail-notes"><div className="stat-label" style={{ marginBottom: 6 }}>Trade Thesis / Notes</div><p>{t.notes}</p></div>}
       {t._loadingShots && <div className="hint" style={{ marginTop: 14 }}><Loader2 size={13} className="spin" /> Loading screenshots…</div>}
-      {!t._loadingShots && t.screenshots?.length > 0 && (
+      {!t._loadingShots && (t.screenshots?.length ?? 0) > 0 && (
         <div className="detail-shots">
           <div className="stat-label" style={{ marginBottom: 8 }}>Screenshot Gallery</div>
           <div className="shot-grid">
-            {t.screenshots.map((s, si) => (
+            {(t.screenshots || []).map((s, si) => (
               <div className="shot-thumb shot-thumb-lg" key={s.id}>
                 <img src={s.dataUrl} alt={s.name} style={{ cursor: "zoom-in" }} onClick={() => setLightboxIdx(si)} />
                 <div className="shot-thumb-meta"><span>{s.stage}</span><button type="button" onClick={() => downloadDataUrl(s.dataUrl, `${t.id}-${s.stage.replace(/\s+/g, "_")}.jpg`)}><Download size={12} /></button></div>
@@ -1934,18 +1985,18 @@ function TradeDetail({ trade, onClose, onEdit, onDelete, onCopy }) {
         <button className="btn btn-ghost" onClick={() => onCopy(t)}><Copy size={14} /> Copy Trade</button>
         <button className="btn btn-primary" onClick={() => onEdit(t)}><Pencil size={14} /> Edit Trade</button>
       </div>
-      {lightboxIdx !== null && t.screenshots?.length > 0 && (
-        <ImageLightbox shots={t.screenshots} startIndex={lightboxIdx} onClose={closeLightbox} />
+      {lightboxIdx !== null && (t.screenshots?.length ?? 0) > 0 && (
+        <ImageLightbox shots={t.screenshots || []} startIndex={lightboxIdx} onClose={closeLightbox} />
       )}
     </Modal>
   );
 }
-function DetailStat({ label, value }) { return <div className="detail-stat"><span className="stat-label">{label}</span><span className="mono detail-stat-val">{value}</span></div>; }
+function DetailStat({ label, value }: { label: ReactNode; value: ReactNode }) { return <div className="detail-stat"><span className="stat-label">{label}</span><span className="mono detail-stat-val">{value}</span></div>; }
 
 /* ============================================================================
    FILTERS BAR
 ============================================================================ */
-function FiltersBar({ filters, setFilters, assets, strategies, tags = [] }) {
+function FiltersBar({ filters, setFilters, assets, strategies, tags = [] }: { filters: Filters; setFilters: Dispatch<SetStateAction<Filters>>; assets: string[]; strategies: string[]; tags?: string[] }) {
   const [open, setOpen] = useState(false);
   // The search term lives here and only lands in the shared filters once typing
   // pauses. Committing per keystroke re-filters the whole journal and schedules
@@ -1957,8 +2008,8 @@ function FiltersBar({ filters, setFilters, assets, strategies, tags = [] }) {
     return () => clearTimeout(id);
   }, [searchDraft, filters.search, setFilters]);
 
-  const set = (k) => (e) => setFilters((f) => ({ ...f, [k]: e.target.value }));
-  const applyPreset = (datePreset) => setFilters((f) => ({ ...f, datePreset, ...(datePreset !== "custom" ? { dateFrom: "", dateTo: "" } : {}) }));
+  const set = (k: keyof Filters) => (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setFilters((f) => ({ ...f, [k]: e.target.value }));
+  const applyPreset = (datePreset: string) => setFilters((f) => ({ ...f, datePreset, ...(datePreset !== "custom" ? { dateFrom: "", dateTo: "" } : {}) }));
   // Resets the draft too — it is the only thing that clears search from outside
   // the input, so no separate syncing effect is needed.
   const reset = () => { setSearchDraft(""); setFilters(DEFAULT_FILTERS); };
@@ -2020,7 +2071,26 @@ const TRADE_COLUMNS = [
 ];
 // Exported for the component smoke tests (App.test.jsx) — App itself is still
 // the only intended consumer.
-export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDelete, onBulkEdit, onToast, accounts = [], strategies = [], showAccount = false, hiddenColumns, onToggleColumn, initialSort = DEFAULT_TABLE_SORT, onSortChange, initialPageSize = 50, onPageSizeChange }) {
+interface TradesTableProps {
+  trades: ComputedTrade[];
+  onView: (t: ComputedTrade) => void;
+  onEdit: (t: ComputedTrade) => void;
+  onDelete: (id: string) => void;
+  onCopy: (t: ComputedTrade) => void;
+  onBulkDelete?: (ids: string[]) => void;
+  onBulkEdit?: (ids: string[], patch: Record<string, unknown>, label: string) => void;
+  onToast?: (toast: { message: string; tone?: string; action?: Any }) => void;
+  accounts?: Account[];
+  strategies?: string[];
+  showAccount?: boolean;
+  hiddenColumns?: string[];
+  onToggleColumn?: (key: string) => void;
+  initialSort?: TableSort;
+  onSortChange?: (sort: TableSort) => void;
+  initialPageSize?: number;
+  onPageSizeChange?: (n: number) => void;
+}
+export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDelete, onBulkEdit, onToast, accounts = [], strategies = [], showAccount = false, hiddenColumns, onToggleColumn, initialSort = DEFAULT_TABLE_SORT, onSortChange, initialPageSize = 50, onPageSizeChange }: TradesTableProps) {
   const tz = useJournalTz();
   // Sort and page size live here but seed from preferences and report changes
   // back up — the table unmounts on every tab switch, and coming back to a
@@ -2032,13 +2102,13 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
   // One selection drives every bulk action. Compare is just the case where
   // exactly two rows are picked, so the row checkbox means the same thing
   // regardless of which action the user ends up taking.
-  const [selectedIds, setSelectedIds] = useState([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [compareOpen, setCompareOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [colMenuOpen, setColMenuOpen] = useState(false);
-  const colMenuRef = useRef(null);
+  const colMenuRef = useRef<HTMLDivElement>(null);
   const hidden = hiddenColumns || [];
-  const show = (key) => !hidden.includes(key);
+  const show = (key: string) => !hidden.includes(key);
   // ServiceNow-style inline list edit: hover a row and a pencil appears in every
   // editable cell; click it (or double-click the cell) to edit in place, without
   // opening the form. The editable set is the metadata columns — Symbol, Market,
@@ -2046,28 +2116,28 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
   // behind the form. Each edit routes through onBulkEdit (single-row batch), so
   // the trade is replaced not mutated and computeTrade's cache re-derives.
   // Disabled when no onBulkEdit is wired (the component tests render without it).
-  const [inlineEdit, setInlineEdit] = useState(null); // { id, field } | null
+  const [inlineEdit, setInlineEdit] = useState<{ id: string; field: string } | null>(null);
   const canInline = !!onBulkEdit;
-  const INLINE_FIELDS = {
+  const INLINE_FIELDS: Record<string, { label: string; type: "text" | "select"; options?: string[] }> = {
     symbol: { label: "symbol", type: "text" },
     marketType: { label: "market", type: "select", options: MARKET_TYPES },
     direction: { label: "direction", type: "select", options: DIRECTIONS },
     grade: { label: "grade", type: "select", options: GRADES },
     status: { label: "status", type: "select", options: STATUS },
   };
-  const startInline = (id, field) => { if (canInline) setInlineEdit({ id, field }); };
-  const isEditing = (id, field) => inlineEdit?.id === id && inlineEdit?.field === field;
-  const commitInline = (t, field, raw) => {
+  const startInline = (id: string, field: string) => { if (canInline) setInlineEdit({ id, field }); };
+  const isEditing = (id: string, field: string) => inlineEdit?.id === id && inlineEdit?.field === field;
+  const commitInline = (t: ComputedTrade, field: string, raw: string) => {
     setInlineEdit(null);
     const v = field === "symbol" ? String(raw).trim().toUpperCase() : String(raw);
     if (field === "symbol" && !v) return;          // a trade must keep a symbol
-    if (v === String(t[field] ?? "")) return;      // no change
-    onBulkEdit([t.id], { [field]: v }, `${INLINE_FIELDS[field].label} set to ${v}`);
+    if (v === String((t as Any)[field] ?? "")) return;      // no change
+    onBulkEdit?.([t.id], { [field]: v }, `${INLINE_FIELDS[field].label} set to ${v}`);
   };
   // Rendered as a plain function, NOT a nested <Component>: a component defined
   // in render gets a fresh identity each pass and would remount the editing
   // input mid-keystroke, blurring it. Returning elements keeps reconciliation.
-  const inlineCell = (t, field, display, tdClass = "") => {
+  const inlineCell = (t: ComputedTrade, field: string, display: ReactNode, tdClass = "") => {
     const cfg = INLINE_FIELDS[field];
     if (!canInline) return <td className={tdClass}>{display}</td>;
     const editing = isEditing(t.id, field);
@@ -2078,17 +2148,17 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
         title={editing ? undefined : `Double-click to edit ${cfg.label}`}>
         {editing ? (
           cfg.type === "text" ? (
-            <input autoFocus className="input inline-input" defaultValue={t[field] ?? ""} aria-label={`${cfg.label} for ${t.id}`}
+            <input autoFocus className="input inline-input" defaultValue={(t as Any)[field] ?? ""} aria-label={`${cfg.label} for ${t.id}`}
               onClick={(e) => e.stopPropagation()}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitInline(t, field, e.target.value); } else if (e.key === "Escape") setInlineEdit(null); }}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitInline(t, field, (e.target as HTMLInputElement).value); } else if (e.key === "Escape") setInlineEdit(null); }}
               onBlur={(e) => commitInline(t, field, e.target.value)} />
           ) : (
-            <select autoFocus className="input inline-input" defaultValue={t[field] ?? ""} aria-label={`${cfg.label} for ${t.id}`}
+            <select autoFocus className="input inline-input" defaultValue={(t as Any)[field] ?? ""} aria-label={`${cfg.label} for ${t.id}`}
               onClick={(e) => e.stopPropagation()}
               onChange={(e) => commitInline(t, field, e.target.value)}
               onBlur={() => setInlineEdit(null)}
               onKeyDown={(e) => { if (e.key === "Escape") setInlineEdit(null); }}>
-              {cfg.options.map((o) => <option key={o} value={o}>{o}</option>)}
+              {cfg.options?.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           )
         ) : (
@@ -2103,12 +2173,12 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
   };
   // Memoized: the keyboard-nav effect below depends on it, and the raw arrow
   // would re-subscribe that listener every render.
-  const toggleSelected = useCallback((id) => setSelectedIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id])), []);
+  const toggleSelected = useCallback((id: string) => setSelectedIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id])), []);
 
   // Close the column picker on any click outside it.
   useEffect(() => {
     if (!colMenuOpen) return;
-    const onDoc = (e) => { if (!colMenuRef.current?.contains(e.target)) setColMenuOpen(false); };
+    const onDoc = (e: globalThis.MouseEvent) => { if (!colMenuRef.current?.contains(e.target as Node)) setColMenuOpen(false); };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, [colMenuOpen]);
@@ -2122,7 +2192,7 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
     const isDateKey = /Date/.test(sortKey);
     const nullsLast = sortKey === "pnlAmount" || sortKey === "actualRR";
     const keyed = trades.map((t) => {
-      let v = t[sortKey];
+      let v: Any = (t as Any)[sortKey];
       if (nullsLast) v = v ?? -Infinity;
       else if (isDateKey && typeof v === "string") v = new Date(v).getTime() || 0;
       return { v, t };
@@ -2163,11 +2233,11 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
      open above this table" check without the table knowing about any of them. */
   const [cursor, setCursor] = useState(-1);
   const cursorIdx = Math.min(cursor, pageItems.length - 1);
-  const tbodyRef = useRef(null);
+  const tbodyRef = useRef<HTMLTableSectionElement>(null);
   useEffect(() => {
-    const onKey = (e) => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
-      const tag = document.activeElement?.tagName?.toLowerCase();
+      const tag = (document.activeElement as HTMLElement | null)?.tagName?.toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select") return;
       if (document.body.style.overflow === "hidden") return;
       if (!pageItems.length) return;
@@ -2195,7 +2265,7 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
   const pageIds = pageItems.map((t) => t.id);
   const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.includes(id));
   const somePageSelected = pageIds.some((id) => selectedIds.includes(id));
-  const headerCbRef = useRef(null);
+  const headerCbRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (headerCbRef.current) headerCbRef.current.indeterminate = somePageSelected && !allPageSelected;
   }, [somePageSelected, allPageSelected]);
@@ -2219,14 +2289,14 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
     }
   };
 
-  const th = (key, label) => {
+  const th = (key: string, label: string) => {
     const active = sortKey === key;
     return (
       <th
         className="th-sortable" title={`Sort by ${label}`}
         aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
         onClick={() => {
-          const next = active ? { key, dir: sortDir === "asc" ? "desc" : "asc" } : { key, dir: "desc" };
+          const next: TableSort = active ? { key, dir: sortDir === "asc" ? "desc" : "asc" } : { key, dir: "desc" };
           setSortKey(next.key); setSortDir(next.dir);
           onSortChange?.(next);
         }}
@@ -2359,9 +2429,9 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
     </div>
   );
 }
-function TradeCompareModal({ trades, onClose }) {
+function TradeCompareModal({ trades, onClose }: { trades: ComputedTrade[]; onClose: () => void }) {
   const [a, b] = trades;
-  const rows = [
+  const rows: [string, ReactNode, ReactNode][] = [
     ["Symbol", a.symbol, b.symbol],
     ["Direction", a.direction, b.direction],
     ["Entry Price", fmtNum(a._entry), fmtNum(b._entry)],
@@ -2389,51 +2459,52 @@ function TradeCompareModal({ trades, onClose }) {
 /* ============================================================================
    PERFORMANCE CALENDAR
 ============================================================================ */
-function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences }) {
+interface DayStat { pnl: number; count: number; }
+function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences }: { trades: ComputedTrade[]; onSelectDay: (key: string) => void; preferences: Preferences; setPreferences: Dispatch<SetStateAction<Preferences>> }) {
   const tz = useJournalTz();
-  const [noteDate, setNoteDate] = useState(null);
+  const [noteDate, setNoteDate] = useState<string | null>(null);
   const dayNotes = preferences.dayNotes || {};
-  const saveDayNote = (key, text) => setPreferences((p) => ({ ...p, dayNotes: { ...p.dayNotes, [key]: text } }));
+  const saveDayNote = (key: string, text: string) => setPreferences((p) => ({ ...p, dayNotes: { ...p.dayNotes, [key]: text } }));
   // parseLocalInputValue, not new Date(key): a bare "2026-07-17" through the
   // Date constructor is UTC midnight, which west of the meridian is still the
   // evening of the 16th — the restored cursor sat one day behind its own key.
   const [cursor, setCursorState] = useState(() => preferences.calendarCursor ? parseLocalInputValue(preferences.calendarCursor) : zonedNow(tz));
-  const setCursor = (next) => {
+  const setCursor = (next: Date) => {
     setCursorState(next);
-    setPreferences((p) => ({ ...p, calendarCursor: isoDate(next) }));
+    setPreferences((p) => ({ ...p, calendarCursor: isoDate(next) || "" }));
   };
   const calendarView = preferences.calendarView || "monthly";
-  const setCalendarView = (view) => setPreferences((p) => ({ ...p, calendarView: view }));
+  const setCalendarView = (view: string) => setPreferences((p) => ({ ...p, calendarView: view }));
   const viewRange = dateRangeForPreset(calendarView, cursor, preferences.calendar?.dateFrom, preferences.calendar?.dateTo);
   const scopedTrades = useMemo(() => {
     if (!viewRange.from && !viewRange.to) return trades;
-    return trades.filter((t) => dateInRange(t.exitDateTime || t.entryDateTime, viewRange.from, viewRange.to));
+    return trades.filter((t) => dateInRange(t.exitDateTime || t.entryDateTime, viewRange.from || "", viewRange.to || ""));
   }, [trades, viewRange.from, viewRange.to]);
   const scopedStats = summarize(scopedTrades);
   const byDay = useMemo(() => {
-    const map = {};
+    const map: Record<string, DayStat> = {};
     scopedTrades.filter((t) => t.status === "Closed" && t.pnlAmount !== null && t.exitDateTime).forEach((t) => {
       const k = isoDate(t.exitDateTime);
       if (!k) return;
       if (!map[k]) map[k] = { pnl: 0, count: 0 };
-      map[k].pnl += t.pnlAmount; map[k].count += 1;
+      map[k].pnl += t.pnlAmount as number; map[k].count += 1;
     });
     return map;
   }, [scopedTrades]);
   const byMonth = useMemo(() => {
-    const map = {};
+    const map: Record<string, DayStat> = {};
     scopedTrades.filter((t) => t.status === "Closed" && t.pnlAmount !== null && t.exitDateTime).forEach((t) => {
       const k = monthKey(t.exitDateTime);
       if (!k) return;
       if (!map[k]) map[k] = { pnl: 0, count: 0 };
-      map[k].pnl += t.pnlAmount; map[k].count += 1;
+      map[k].pnl += t.pnlAmount as number; map[k].count += 1;
     });
     return map;
   }, [scopedTrades]);
 
   // Prev/next move by whatever period is on screen, so stepping a daily view
   // walks days rather than jumping a whole month.
-  const step = (dir) => {
+  const step = (dir: number) => {
     const d = new Date(cursor);
     if (calendarView === "daily") d.setDate(d.getDate() + dir);
     else if (calendarView === "weekly") d.setDate(d.getDate() + dir * 7);
@@ -2457,12 +2528,12 @@ function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences 
   const first = new Date(year, month, 1);
   const startDow = first.getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const cells = [];
+  const cells: (number | null)[] = [];
   for (let i = 0; i < startDow; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
   const maxAbs = Math.max(1, ...Object.values(byDay).map((v) => Math.abs(v.pnl)));
   const maxMonthAbs = Math.max(1, ...Object.values(byMonth).map((v) => Math.abs(v.pnl)));
-  const heatBg = (pnl, max) => {
+  const heatBg = (pnl: number, max: number) => {
     const intensity = Math.min(1, Math.abs(pnl) / max);
     return pnl >= 0 ? `rgba(34,197,94,${0.12 + intensity * 0.35})` : `rgba(240,69,91,${0.12 + intensity * 0.35})`;
   };
@@ -2471,7 +2542,7 @@ function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences 
   // this one comparison.
   const todayKey = isoDate(zonedNow(tz));
   // One day cell, shared by the weekly and monthly grids.
-  const dayCell = (key, label, i) => {
+  const dayCell = (key: string, label: ReactNode, i: number) => {
     const info = byDay[key];
     const isToday = key === todayKey;
     return (
@@ -2525,7 +2596,7 @@ function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences 
         </div>
 
         {calendarView === "daily" && (() => {
-          const key = isoDate(cursor);
+          const key = isoDate(cursor) || "";
           const info = byDay[key];
           const isToday = key === todayKey;
           return (
@@ -2554,7 +2625,7 @@ function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences 
           return (
             <>
               <div className="calendar-grid calendar-dow">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => <div key={d} className="calendar-dow-cell">{d}</div>)}</div>
-              <div className="calendar-grid">{days.map((d, i) => dayCell(isoDate(d), d.getDate(), i))}</div>
+              <div className="calendar-grid">{days.map((d, i) => dayCell(isoDate(d) || "", d.getDate(), i))}</div>
             </>
           );
         })()}
@@ -2565,7 +2636,7 @@ function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences 
             <div className="calendar-grid">
               {cells.map((d, i) => d === null
                 ? <div key={i} className="calendar-cell calendar-cell-empty" />
-                : dayCell(isoDate(new Date(year, month, d)), d, i))}
+                : dayCell(isoDate(new Date(year, month, d)) || "", d, i))}
             </div>
           </>
         )}
@@ -2593,7 +2664,7 @@ function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences 
 // Shared by the calendar's day-note button and all three Journal-tab grains.
 // `title`/`placeholder` default to the daily wording so the calendar caller —
 // which only passes `date` — is unchanged.
-function DayNoteModal({ date, title, value, onSave, onClose, placeholder }) {
+function DayNoteModal({ date, title, value, onSave, onClose, placeholder }: { date?: string; title?: string; value: string; onSave: (text: string) => void; onClose: () => void; placeholder?: string }) {
   const [text, setText] = useState(value);
   return (
     <Modal title={title || `Journal — ${date}`} onClose={onClose}>
@@ -2617,8 +2688,16 @@ function DayNoteModal({ date, title, value, onSave, onClose, placeholder }) {
 // Per-grain config: how to key "now", which store, how to bucket trade stats,
 // how to label an entry, and what add/filter input to render. The three key
 // formats are all zero-padded and sort lexically into chronological order.
-const WEEK_LABEL = (key) => { const m = /^(\d{4})-W(\d{2})$/.exec(key); return m ? `Week ${Number(m[2])} · ${m[1]}` : key; };
-const JOURNAL_GRAINS = {
+const WEEK_LABEL = (key: string) => { const m = /^(\d{4})-W(\d{2})$/.exec(key); return m ? `Week ${Number(m[2])} · ${m[1]}` : key; };
+interface JournalGrainConfig {
+  label: string; noun: string; store: "dayNotes" | "weekNotes" | "yearNotes";
+  nowKey: (tz: string) => string | null;
+  statKey: (exitDT: string) => string | null;
+  entryLabel: (key: string) => string;
+  inputType: string; canViewTrades: boolean;
+  placeholder: string; deleteHint: string;
+}
+const JOURNAL_GRAINS: Record<JournalGrain, JournalGrainConfig> = {
   day: {
     label: "Daily", noun: "day", store: "dayNotes",
     nowKey: (tz) => isoDate(zonedNow(tz)),
@@ -2650,22 +2729,25 @@ const JOURNAL_GRAINS = {
 
 // One grain's page. Everything grain-specific comes from `grain`; the body is
 // the same for all three.
-function JournalSection({ grain, trades, preferences, setPreferences, onSelectDay, onToast }) {
+function JournalSection({ grain, trades, preferences, setPreferences, onSelectDay, onToast }: {
+  grain: JournalGrain; trades: ComputedTrade[]; preferences: Preferences; setPreferences: Dispatch<SetStateAction<Preferences>>;
+  onSelectDay: (key: string) => void; onToast?: (toast: { message: string; tone?: string }) => void;
+}) {
   const tz = useJournalTz();
   const cfg = JOURNAL_GRAINS[grain];
   // Stable ref for the entries memo below — a fresh `|| {}` each render would
   // recompute the list every time.
   const notes = useMemo(() => preferences[cfg.store] || {}, [preferences, cfg.store]);
-  const [editKey, setEditKey] = useState(null);
-  const [deleteKey, setDeleteKey] = useState(null);
-  const [newKey, setNewKey] = useState(() => cfg.nowKey(tz));
-  const saveNote = (key, text) => setPreferences((p) => ({ ...p, [cfg.store]: { ...(p[cfg.store] || {}), [key]: text } }));
+  const [editKey, setEditKey] = useState<string | null>(null);
+  const [deleteKey, setDeleteKey] = useState<string | null>(null);
+  const [newKey, setNewKey] = useState(() => cfg.nowKey(tz) || "");
+  const saveNote = (key: string, text: string) => setPreferences((p) => ({ ...p, [cfg.store]: { ...(p[cfg.store] || {}), [key]: text } }));
   const keyValid = JOURNAL_KEY_PATTERNS[grain].test(newKey);
 
   // Closed trades with a P&L, bucketed by this grain's period of the exit —
   // so an entry's stats line matches how the rest of the app buckets.
   const byPeriod = useMemo(() => {
-    const m = {};
+    const m: Record<string, DayStat> = {};
     trades.forEach((t) => {
       if (t.status !== "Closed" || t.pnlAmount === null || !t.exitDateTime) return;
       const k = cfg.statKey(t.exitDateTime);
@@ -2688,15 +2770,15 @@ function JournalSection({ grain, trades, preferences, setPreferences, onSelectDa
   const [showFilter, setShowFilter] = useState(false);
   const filterVisible = showFilter || filterActive;
   const filtered = useMemo(() => filterJournalEntries(entries, journalFilter), [entries, journalFilter]);
-  const setFilterField = (key) => (e) => setJournalFilter((f) => ({ ...f, [key]: e.target.value }));
+  const setFilterField = (key: "from" | "to" | "search") => (e: ChangeEvent<HTMLInputElement>) => setJournalFilter((f) => ({ ...f, [key]: e.target.value }));
 
-  const notifyExport = (res) => {
+  const notifyExport = (res: ExportResult | undefined) => {
     if (!res || res.canceled) return;
     if (res.ok) onToast?.({ message: `Journal exported${res.path ? "" : " to your downloads"}`, tone: "profit" });
     else onToast?.({ message: `Export failed${res.error ? `: ${res.error}` : ""}`, tone: "loss" });
   };
 
-  const exportAs = async (kind) => {
+  const exportAs = async (kind: string) => {
     const stamp = isoDate(zonedNow(tz));
     const scope = filterActive ? "Filtered" : "Full";
     const title = `${cfg.label} Trading Journal`;
@@ -2791,12 +2873,12 @@ function JournalSection({ grain, trades, preferences, setPreferences, onSelectDa
 
 // Exported for the component smoke tests (App.test.jsx) — App itself is still
 // the only intended consumer. Defaults to the daily grain.
-export function JournalPanel(props) {
-  const [grain, setGrain] = useState("day");
+export function JournalPanel(props: Omit<Parameters<typeof JournalSection>[0], "grain">) {
+  const [grain, setGrain] = useState<JournalGrain>("day");
   return (
     <div className="stack">
       <div className="segmented journal-grain-switch">
-        {Object.entries(JOURNAL_GRAINS).map(([key, cfg]) => (
+        {(Object.entries(JOURNAL_GRAINS) as [JournalGrain, JournalGrainConfig][]).map(([key, cfg]) => (
           <button key={key} type="button" className={`seg-btn ${grain === key ? "seg-active-plain" : ""}`} onClick={() => setGrain(key)}>{cfg.label}</button>
         ))}
       </div>
@@ -2818,10 +2900,12 @@ export function JournalPanel(props) {
 ============================================================================ */
 // Exported for the component smoke tests (App.test.jsx) — App itself is still
 // the only intended consumer.
-export function PlaybookPanel({ settings, setSettings, strategies, setStrategies, trades = [] }) {
+export function PlaybookPanel({ settings, setSettings, strategies, setStrategies, trades = [] }: {
+  settings: Settings; setSettings: Dispatch<SetStateAction<Settings>>; strategies: string[]; setStrategies: Dispatch<SetStateAction<string[]>>; trades?: ComputedTrade[];
+}) {
   const [showStrategyMgr, setShowStrategyMgr] = useState(false);
   const countByStrategy = useMemo(() => {
-    const m = {};
+    const m: Record<string, number> = {};
     trades.forEach((t) => { if (t.strategy) m[t.strategy] = (m[t.strategy] || 0) + 1; });
     return m;
   }, [trades]);
@@ -2873,11 +2957,14 @@ export function PlaybookPanel({ settings, setSettings, strategies, setStrategies
 ============================================================================ */
 // Add/edit one transaction. Amount is captured positive; the deposit/withdrawal
 // toggle carries the sign, so the stored record can't disagree with itself.
-function TransactionModal({ initial, accountName, onSave, onClose }) {
+function TransactionModal({ initial, accountName, onSave, onClose }: {
+  initial?: Partial<Transaction> | null; accountName?: string;
+  onSave: (t: { type: "deposit" | "withdrawal"; amount: number; date: string; note: string }) => void; onClose: () => void;
+}) {
   const tz = useJournalTz();
-  const [type, setType] = useState(initial?.type || "deposit");
+  const [type, setType] = useState<"deposit" | "withdrawal">(initial?.type || "deposit");
   const [amount, setAmount] = useState(initial?.amount != null ? String(initial.amount) : "");
-  const [date, setDate] = useState((initial?.date || "").slice(0, 10) || isoDate(zonedNow(tz)));
+  const [date, setDate] = useState((initial?.date || "").slice(0, 10) || isoDate(zonedNow(tz)) || "");
   const [note, setNote] = useState(initial?.note || "");
   const amt = Math.abs(num(amount, 0));
   const valid = amt > 0 && !!date;
@@ -2905,9 +2992,12 @@ function TransactionModal({ initial, accountName, onSave, onClose }) {
 // Exported for the component smoke tests (App.test.jsx). App is the only
 // intended consumer. `startingBalance`/`tradesNet` are the account-scoped
 // figures the balance folds together.
-export function CashflowPanel({ settings, setSettings, accounts = [], activeAccountId = "", startingBalance = 0, tradesNet = 0, onToast }) {
-  const [editTxn, setEditTxn] = useState(null); // {} = new (truthy but no id), record = edit
-  const [deleteTxn, setDeleteTxn] = useState(null);
+export function CashflowPanel({ settings, setSettings, accounts = [], activeAccountId = "", startingBalance = 0, tradesNet = 0, onToast }: {
+  settings: Settings; setSettings: Dispatch<SetStateAction<Settings>>; accounts?: Account[]; activeAccountId?: string;
+  startingBalance?: number; tradesNet?: number; onToast?: (toast: { message: string; tone?: string }) => void;
+}) {
+  const [editTxn, setEditTxn] = useState<Partial<Transaction> | null>(null); // {} = new (truthy but no id), record = edit
+  const [deleteTxn, setDeleteTxn] = useState<Transaction | null>(null);
   const [filter, setFilter] = useState({ from: "", to: "", type: "", search: "" });
   const filterActive = !!(filter.from || filter.to || filter.type || filter.search.trim());
   const [showFilter, setShowFilter] = useState(false);
@@ -2924,7 +3014,7 @@ export function CashflowPanel({ settings, setSettings, accounts = [], activeAcco
   // starting balance, so the column reads exactly what the filter shows.
   const rows = useMemo(() => {
     const asc = [...filtered].reverse();
-    const out = [];
+    const out: (Transaction & { balanceAfter: number })[] = [];
     let running = startingBalance;
     for (let i = 0; i < asc.length; i++) {
       running += (asc[i].type === "withdrawal" ? -1 : 1) * asc[i].amount;
@@ -2941,10 +3031,10 @@ export function CashflowPanel({ settings, setSettings, accounts = [], activeAcco
   const accountBalance = startingBalance + tradesNet + transactionsNet(scoped);
 
   const multiAccount = accounts.length > 1;
-  const accountName = (id) => accounts.find((a) => a.id === id)?.name || "";
+  const accountName = (id: string) => accounts.find((a) => a.id === id)?.name || "";
   const targetAccountId = activeAccountId || accounts[0]?.id || "";
 
-  const saveTxn = (data) => {
+  const saveTxn = (data: { type: "deposit" | "withdrawal"; amount: number; date: string; note: string }) => {
     setSettings((s) => {
       const list = normalizeTransactions(s.transactions);
       if (editTxn?.id) return { ...s, transactions: list.map((t) => (t.id === editTxn.id ? { ...t, ...data } : t)) };
@@ -2952,11 +3042,11 @@ export function CashflowPanel({ settings, setSettings, accounts = [], activeAcco
     });
     onToast?.({ message: editTxn?.id ? "Transaction updated" : `${data.type === "deposit" ? "Deposit" : "Withdrawal"} recorded`, tone: "neutral" });
   };
-  const removeTxn = (id) => {
+  const removeTxn = (id: string) => {
     setSettings((s) => ({ ...s, transactions: normalizeTransactions(s.transactions).filter((t) => t.id !== id) }));
     onToast?.({ message: "Transaction removed", tone: "neutral" });
   };
-  const setField = (key) => (e) => setFilter((f) => ({ ...f, [key]: e.target.value }));
+  const setField = (key: "from" | "to" | "type" | "search") => (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setFilter((f) => ({ ...f, [key]: e.target.value }));
 
   return (
     <div className="stack">
@@ -3038,7 +3128,7 @@ export function CashflowPanel({ settings, setSettings, accounts = [], activeAcco
         )}
       </Panel>
 
-      {editTxn && <TransactionModal initial={editTxn} accountName={multiAccount ? accountName(editTxn.id ? editTxn.accountId : targetAccountId) : ""} onSave={saveTxn} onClose={() => setEditTxn(null)} />}
+      {editTxn && <TransactionModal initial={editTxn} accountName={multiAccount ? accountName((editTxn.id ? editTxn.accountId : targetAccountId) || "") : ""} onSave={saveTxn} onClose={() => setEditTxn(null)} />}
       {deleteTxn && (
         <ConfirmModal
           title="Delete Transaction" danger confirmLabel="Delete"
@@ -3068,7 +3158,7 @@ const HELP_GUIDES = [
   { icon: FileDown, title: "Reports", body: "Export a professional trading report (Excel / Word / PDF) for any scope — one account or all pooled." },
   { icon: SettingsIcon, title: "Settings", body: "Accounts, goals, timezone, appearance, the login gate, and backups. Restore replaces everything, so back up first." },
 ];
-export function HelpPanel({ settings }) {
+export function HelpPanel({ settings }: { settings?: Settings }) {
   return (
     <div className="stack">
       <Panel title="About">
@@ -3117,9 +3207,9 @@ export function HelpPanel({ settings }) {
    outside the chart's Suspense boundary, and pulling it from the lazy module
    would make the toggle wait on Recharts before it could paint.
 ============================================================================ */
-function lazyChart(name, height) {
-  const Lazy = lazy(() => import("./Charts").then((m) => ({ default: m[name] })));
-  const Wrapped = (props) => (
+function lazyChart(name: string, height: number) {
+  const Lazy = lazy(() => import("./Charts").then((m) => ({ default: (m as Any)[name] })));
+  const Wrapped = (props: Any) => (
     <Suspense fallback={<div className="chart-loading" style={{ height }} />}>
       <Lazy {...props} />
     </Suspense>
@@ -3141,7 +3231,7 @@ const StrategyPerformanceChart = lazyChart("StrategyPerformanceChart", 240);
 const PerformanceBarChart = lazyChart("PerformanceBarChart", 240);
 const MaeMfeChart = lazyChart("MaeMfeChart", 300);
 
-function ChartModeToggle({ mode, setMode }) {
+function ChartModeToggle({ mode, setMode }: { mode: string; setMode: (m: string) => void }) {
   return (
     <div className="segmented segmented-tight">
       <button type="button" className={`seg-btn ${mode === "amount" ? "seg-active-plain" : ""}`} onClick={() => setMode("amount")}>Amount</button>
@@ -3154,11 +3244,11 @@ function ChartModeToggle({ mode, setMode }) {
 /* ============================================================================
    PANELS
 ============================================================================ */
-function Panel({ title, right, children, className }) {
+function Panel({ title, right, children, className }: { title: ReactNode; right?: ReactNode; children: ReactNode; className?: string }) {
   return <div className={`panel ${className || ""}`}><div className="panel-header"><h4>{title}</h4>{right}</div><div className="panel-body">{children}</div></div>;
 }
 
-function DashboardPanel({ trades, settings, chartMode = "amount", setChartMode }) {
+function DashboardPanel({ trades, settings, chartMode = "amount", setChartMode }: { trades: ComputedTrade[]; settings: Settings; chartMode?: string; setChartMode?: (m: string) => void }) {
   const startingBalance = settings.startingBalance;
   // Period keys are recomputed every render but are only cheap string builds.
   // They belong in the deps below so the figures roll over correctly if the app
@@ -3179,10 +3269,10 @@ function DashboardPanel({ trades, settings, chartMode = "amount", setChartMode }
     balance, maxDD, maxDDPct, streaks, openCount, sharpe, sortino,
   } = useMemo(() => {
     const closed = trades.filter((t) => t.status === "Closed" && t.pnlAmount !== null);
-    const sumWhere = (pred) => closed.filter(pred).reduce((s, t) => s + t.pnlAmount, 0);
+    const sumWhere = (pred: (t: ComputedTrade) => boolean) => closed.filter(pred).reduce((s, t) => s + (t.pnlAmount as number), 0);
     const stats = summarize(trades);
     const curve = equityCurve(trades, startingBalance);
-    const daily = groupPerformance(closed, (d) => ({ key: isoDate(d), label: fmtDate(d), sortKey: isoDate(d) }), "date").slice(-30);
+    const daily = groupPerformance(closed, (d) => ({ key: isoDate(d) || "", label: fmtDate(d), sortKey: isoDate(d) || undefined }), "date").slice(-30);
     return {
       overall: stats,
       todayPnl: sumWhere((t) => isoDate(t.exitDateTime) === today),
@@ -3209,7 +3299,7 @@ function DashboardPanel({ trades, settings, chartMode = "amount", setChartMode }
     { label: "Monthly Profit", value: monthPnl, target: goals.monthlyProfit, display: fmtCurrency(monthPnl), targetDisplay: fmtCurrency(goals.monthlyProfit) },
     { label: "Yearly Profit", value: yearlyProfit, target: goals.yearlyProfit, display: fmtCurrency(yearlyProfit), targetDisplay: fmtCurrency(goals.yearlyProfit) },
     { label: "Win Rate", value: overall.winRate || 0, target: goals.winRate, display: fmtPercent(overall.winRate || 0, 1), targetDisplay: fmtPercent(goals.winRate, 1) },
-    { label: "Profit Factor", value: Number.isFinite(overall.profitFactor) ? overall.profitFactor : 0, target: goals.profitFactor, display: fmtProfitFactor(overall.profitFactor), targetDisplay: fmtNum(goals.profitFactor) },
+    { label: "Profit Factor", value: Number.isFinite(overall.profitFactor) ? overall.profitFactor as number : 0, target: goals.profitFactor, display: fmtProfitFactor(overall.profitFactor), targetDisplay: fmtNum(goals.profitFactor) },
     { label: "Average RR", value: overall.avgRR || 0, target: goals.averageRR, display: `${fmtNum(overall.avgRR || 0)}R`, targetDisplay: `${fmtNum(goals.averageRR)}R` },
   ];
 
@@ -3264,7 +3354,11 @@ function DashboardPanel({ trades, settings, chartMode = "amount", setChartMode }
   );
 }
 
-function AnalyticsPanel({ trades, chartMode, setChartMode, preferences, setPreferences }) {
+interface GradeStat { grade: string; count: number; s: SummaryStats; }
+interface StrategyStat { name: string; count: number; s: SummaryStats; }
+function AnalyticsPanel({ trades, chartMode, setChartMode, preferences, setPreferences }: {
+  trades: ComputedTrade[]; chartMode: string; setChartMode: (m: string) => void; preferences?: Preferences; setPreferences?: Dispatch<SetStateAction<Preferences>>;
+}) {
   // Every figure on this panel derives from `trades` alone. Grouped into one
   // memo so flipping the Amount/Percent toggle re-renders the charts without
   // re-running summarize() once per grade, per strategy and per direction.
@@ -3273,41 +3367,41 @@ function AnalyticsPanel({ trades, chartMode, setChartMode, preferences, setPrefe
     breakeven, gradeStats, strategyStats, pairCount, hasMaeMfe,
   } = useMemo(() => {
     const closedTrades = trades.filter((t) => t.status === "Closed" && t.pnlAmount !== null);
-    const gradeMap = {}; GRADES.forEach((g) => (gradeMap[g] = []));
+    const gradeMap: Record<string, ComputedTrade[]> = {}; GRADES.forEach((g) => (gradeMap[g] = []));
     trades.forEach((t) => { if (gradeMap[t.grade]) gradeMap[t.grade].push(t); });
-    const strategyMap = {};
+    const strategyMap: Record<string, ComputedTrade[]> = {};
     trades.forEach((t) => { const key = t.strategy?.trim() || "Unspecified"; (strategyMap[key] = strategyMap[key] || []).push(t); });
     return {
       closed: closedTrades,
       overall: summarize(trades),
       longStats: summarize(trades.filter((t) => t.direction === "Long")),
       shortStats: summarize(trades.filter((t) => t.direction === "Short")),
-      monthlyData: groupPerformance(closedTrades, (d) => ({ key: monthKey(d), label: monthLabel(d), sortKey: monthKey(d) }), "month"),
-      weeklyData: groupPerformance(closedTrades, (d) => ({ key: weekOfMonthKey(d), label: weekOfMonthLabel(d), sortKey: weekOfMonthKey(d) }), "week"),
+      monthlyData: groupPerformance(closedTrades, (d) => ({ key: monthKey(d) || "", label: monthLabel(d), sortKey: monthKey(d) || undefined }), "month"),
+      weeklyData: groupPerformance(closedTrades, (d) => ({ key: weekOfMonthKey(d) || "", label: weekOfMonthLabel(d), sortKey: weekOfMonthKey(d) || undefined }), "week"),
       yearlyData: groupPerformance(closedTrades, (d) => String(new Date(d).getFullYear()), "year"),
       breakeven: closedTrades.filter((t) => t.result === "breakeven").length,
-      gradeStats: GRADES.map((g) => ({ grade: g, count: gradeMap[g].length, s: summarize(gradeMap[g]) })),
+      gradeStats: GRADES.map((g) => ({ grade: g, count: gradeMap[g].length, s: summarize(gradeMap[g]) })) as GradeStat[],
       strategyStats: Object.entries(strategyMap)
         .sort((a, b) => b[1].length - a[1].length)
-        .map(([name, list]) => ({ name, count: list.length, s: summarize(list) })),
+        .map(([name, list]) => ({ name, count: list.length, s: summarize(list) })) as StrategyStat[],
       pairCount: new Set(trades.map((t) => (t.symbol || "").trim() || "Unspecified")).size,
       hasMaeMfe: closedTrades.some((t) => t._mae !== null || t._mfe !== null),
     };
   }, [trades]);
 
-  const windowed = (rows, count) => (count ? rows.slice(-count) : rows);
+  const windowed = <T,>(rows: T[], count: number | undefined) => (count ? rows.slice(-count) : rows);
   // Same picker for both flavours; `suffix` only changes the option wording
   // ("Last 5" periods vs "Last 5 trades").
-  const chartPicker = (key, label, suffix = "") => (
+  const chartPicker = (key: keyof Preferences, label: string, suffix = "") => (
     <select
       className="input chart-period-select" aria-label={label} title={label}
-      value={preferences?.[key] ?? 5}
+      value={(preferences?.[key] as number) ?? 5}
       onChange={(e) => setPreferences?.((p) => ({ ...p, [key]: Number(e.target.value) }))}
     >
       {CHART_PERIOD_CHOICES.map((n) => <option key={n} value={n}>{n === 0 ? "All" : `Last ${n}${suffix}`}</option>)}
     </select>
   );
-  const periodPicker = (key, label) => chartPicker(key, label);
+  const periodPicker = (key: keyof Preferences, label: string) => chartPicker(key, label);
   // The trade-based charts (RR, hour-of-day, duration) window to the most
   // recent N *closed trades* rather than periods — memoised per count so
   // flipping one picker doesn't re-sort for the others.
@@ -3394,8 +3488,8 @@ function AnalyticsPanel({ trades, chartMode, setChartMode, preferences, setPrefe
     </div>
   );
 }
-function PairPerformancePanel({ trades }) {
-  const map = {};
+function PairPerformancePanel({ trades }: { trades: ComputedTrade[] }) {
+  const map: Record<string, { marketType: string; list: ComputedTrade[] }> = {};
   trades.forEach((t) => {
     const key = (t.symbol || "").trim() || "Unspecified";
     if (!map[key]) map[key] = { marketType: t.marketType, list: [] };
@@ -3409,7 +3503,7 @@ function PairPerformancePanel({ trades }) {
     </div>
   );
 }
-function PairCard({ symbol, marketType, list }) {
+function PairCard({ symbol, marketType, list }: { symbol: string; marketType: string; list: ComputedTrade[] }) {
   const s = summarize(list);
   const toneColor = s.net > 0 ? "var(--profit)" : s.net < 0 ? "var(--loss)" : "var(--accent)";
   return (
@@ -3427,7 +3521,7 @@ function PairCard({ symbol, marketType, list }) {
     </div>
   );
 }
-function MiniStatBlock({ title, stats, tone }) {
+function MiniStatBlock({ title, stats, tone }: { title: string; stats: SummaryStats; tone: string }) {
   return (
     <div className={`mini-block mini-block-${tone}`}>
       <h5>{title}</h5>
@@ -3443,7 +3537,10 @@ function MiniStatBlock({ title, stats, tone }) {
 /* ============================================================================
    REPORTS PANEL — Excel + Word export
 ============================================================================ */
-function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onToast, scopeLabel = "" }) {
+function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onToast, scopeLabel = "" }: {
+  allTrades: ComputedTrade[]; filteredTrades: ComputedTrade[]; filtersActive: boolean; settings: Settings;
+  onToast?: (toast: { message: string; tone?: string }) => void; scopeLabel?: string;
+}) {
   const [includeShots, setIncludeShots] = useState(false);
   const [scope, setScope] = useState("all");
   // Which export is mid-flight, so only that button shows a spinner: one of
@@ -3465,7 +3562,7 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
 
   // Turn a save-helper result into a toast. Canceling the native dialog is a
   // deliberate no-op — no success and no error.
-  const notify = (res, kind) => {
+  const notify = (res: ExportResult | undefined, kind: string) => {
     if (!res || res.canceled) return;
     if (res.ok) onToast?.({ message: `${kind} exported${res.path ? "" : " to your downloads"}`, tone: "profit" });
     else onToast?.({ message: `${kind} export failed${res.error ? `: ${res.error}` : ""}`, tone: "loss" });
@@ -3542,11 +3639,11 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
 
   // Screenshots for the closed trades, loaded on demand only when the report is
   // set to include them. Keyed by trade id.
-  const gatherShots = async () => {
+  const gatherShots = async (): Promise<Record<string, ShotDraft[]>> => {
     if (!includeShots) return {};
     const withShots = trades.filter((t) => t.status === "Closed" && (t.screenshotCount || 0) > 0);
     const results = await Promise.all(withShots.map((t) => storage.get(`${SHOTS_PREFIX}${t.id}`, false).catch(() => null)));
-    const map = {};
+    const map: Record<string, ShotDraft[]> = {};
     withShots.forEach((t, i) => { const r = results[i]; if (r?.value) { try { map[t.id] = JSON.parse(r.value).screenshots; } catch { /* unreadable blob — skip */ } } });
     return map;
   };
@@ -3555,13 +3652,13 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
   // trade field is escaped — a symbol or screenshot label containing "<" or "&"
   // would otherwise corrupt the document or inject markup. forWord adds the Office
   // namespaces Word wants; the PDF path gets @page sizing instead.
-  const buildReportHtml = (forWord, shotsByTrade) => {
+  const buildReportHtml = (forWord: boolean, shotsByTrade: Record<string, ShotDraft[]>) => {
     const balance = settings.startingBalance + overall.net;
     const closedTrades = trades.filter((t) => t.status === "Closed");
     const rows = closedTrades.map((t) => `
       <tr><td>${escapeHtml(t.id)}</td><td>${escapeHtml(t.symbol)}</td><td>${escapeHtml(t.marketType)}</td><td>${escapeHtml(t.direction)}</td>
       <td>${fmtDate(t.entryDateTime)}</td><td>${t.exitDateTime ? fmtDate(t.exitDateTime) : "—"}</td>
-      <td style="color:${t.pnlAmount >= 0 ? "#0F9D52" : "#D63A50"}">${fmtCurrency(t.pnlAmount)}</td>
+      <td style="color:${(t.pnlAmount as number) >= 0 ? "#0F9D52" : "#D63A50"}">${fmtCurrency(t.pnlAmount)}</td>
       <td>${t.actualRR !== null ? fmtNum(t.actualRR) + "R" : "—"}</td><td>${escapeHtml(t.grade)}</td></tr>`).join("");
     const shotsHtml = includeShots ? closedTrades.filter((t) => shotsByTrade[t.id]?.length).map((t) => `
       <h4>${escapeHtml(t.id)} — ${escapeHtml(t.symbol)}</h4>
@@ -3625,7 +3722,7 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
     }
   };
 
-  const busyIcon = (kind) => (busy === kind ? <Loader2 size={14} className="spin" /> : <FileDown size={14} />);
+  const busyIcon = (kind: string) => (busy === kind ? <Loader2 size={14} className="spin" /> : <FileDown size={14} />);
 
   return (
     <div className="stack">
@@ -3684,7 +3781,16 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
 ============================================================================ */
 // Exported for the component smoke tests (App.test.jsx) — App itself is still
 // the only intended consumer.
-export function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, setTheme, strategies, onImportTrades, activeAccountId, setActiveAccountId, preferences, setPreferences, users = [], setUsers, currentUser, onAuthenticated }) {
+interface SettingsPanelProps {
+  settings: Settings; setSettings: Dispatch<SetStateAction<Settings>>; trades: ComputedTrade[];
+  replaceAllData: (settings: Settings, trades: Trade[], strategies: string[]) => void | Promise<void>; theme: string; setTheme: Dispatch<SetStateAction<string>>;
+  strategies: string[]; onImportTrades: (trades: Trade[]) => void;
+  activeAccountId: string; setActiveAccountId?: (id: string) => void;
+  preferences: Preferences; setPreferences: Dispatch<SetStateAction<Preferences>>;
+  users?: AuthUser[]; setUsers: Dispatch<SetStateAction<AuthUser[]>>;
+  currentUser?: AuthUser | null; onAuthenticated: (user: AuthUser | null) => void;
+}
+export function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, setTheme, strategies, onImportTrades, activeAccountId, setActiveAccountId, preferences, setPreferences, users = [], setUsers, currentUser, onAuthenticated }: SettingsPanelProps) {
   // ~400 zones × an Intl formatter each is a one-time cost taken when Settings
   // mounts, not on every keystroke in the panel. Offsets are "now"-relative
   // (DST), which is as precise as a picker label needs to be. Ordered by the
@@ -3697,28 +3803,28 @@ export function SettingsPanel({ settings, setSettings, trades, replaceAllData, t
       .map((z) => ({ z, mins: tzOffsetMinutes(z, now), off: tzOffsetLabel(z, now) }))
       .sort((a, b) => (a.mins - b.mins) || a.z.localeCompare(b.z));
   }, []);
-  const fileRef = useRef(null);
-  const csvRef = useRef(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const csvRef = useRef<HTMLInputElement>(null);
   const [msg, setMsg] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
-  const [deleteAccount, setDeleteAccount] = useState(null);
+  const [deleteAccount, setDeleteAccount] = useState<(Account & { count: number }) | null>(null);
   // A CSV whose rows partly match existing trades waits here for the user to
   // choose (import new only / all / cancel); a parsed backup waits here for the
   // replace-everything confirmation. Neither touches the journal until then.
-  const [pendingImport, setPendingImport] = useState(null);
-  const [pendingRestore, setPendingRestore] = useState(null);
+  const [pendingImport, setPendingImport] = useState<{ all: Trade[]; fresh: Trade[]; duplicates: Trade[]; skipped: number } | null>(null);
+  const [pendingRestore, setPendingRestore] = useState<Any>(null);
   const [ruleInput, setRuleInput] = useState("");
   const withShots = trades.filter((t) => (t.screenshotCount || 0) > 0).length;
-  const goals = { ...DEFAULT_GOALS, ...(settings.goals || {}) };
+  const goals: Goals = { ...DEFAULT_GOALS, ...(settings.goals || {}) };
   const checklistRules = settings.checklistRules?.length ? settings.checklistRules : DEFAULT_CHECKLIST_RULES;
-  const setGoal = (key) => (e) => setSettings((s) => ({ ...s, goals: { ...DEFAULT_GOALS, ...(s.goals || {}), [key]: num(e.target.value, 0) || 0 } }));
+  const setGoal = (key: keyof Goals) => (e: ChangeEvent<HTMLInputElement>) => setSettings((s) => ({ ...s, goals: { ...DEFAULT_GOALS, ...(s.goals || {}), [key]: num(e.target.value, 0) || 0 } }));
   const addRule = () => {
     const rule = ruleInput.trim();
     if (!rule) return;
     setSettings((s) => ({ ...s, checklistRules: [...(s.checklistRules?.length ? s.checklistRules : DEFAULT_CHECKLIST_RULES), rule] }));
     setRuleInput("");
   };
-  const removeRule = (rule) => setSettings((s) => ({ ...s, checklistRules: (s.checklistRules?.length ? s.checklistRules : DEFAULT_CHECKLIST_RULES).filter((r) => r !== rule) }));
+  const removeRule = (rule: string) => setSettings((s) => ({ ...s, checklistRules: (s.checklistRules?.length ? s.checklistRules : DEFAULT_CHECKLIST_RULES).filter((r) => r !== rule) }));
 
   /* ---- accounts ---- */
   const accounts = settings.accounts?.length ? settings.accounts : DEFAULT_SETTINGS.accounts;
@@ -3728,7 +3834,7 @@ export function SettingsPanel({ settings, setSettings, trades, replaceAllData, t
   // Each account's balance folds in its cashflow (deposits − withdrawals) the
   // same way the Dashboard and Cashflow tab do, so the three never disagree.
   const txnByAccount = useMemo(() => {
-    const m = {};
+    const m: Record<string, number> = {};
     sortedTransactions(settings.transactions, accounts).forEach((t) => { m[t.accountId] = (m[t.accountId] || 0) + (t.type === "withdrawal" ? -1 : 1) * t.amount; });
     return m;
   }, [settings.transactions, accounts]);
@@ -3738,7 +3844,7 @@ export function SettingsPanel({ settings, setSettings, trades, replaceAllData, t
     const cash = txnByAccount[a.id] || 0;
     return { account: a, count: own.length, net: stats.net, balance: (a.startingBalance || 0) + stats.net + cash };
   }), [accounts, trades, txnByAccount]);
-  const setAccount = (id, key) => (e) => {
+  const setAccount = (id: string, key: keyof Account) => (e: ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value;
     const v = key === "startingBalance" ? (num(raw, 0) || 0) : raw;
     setSettings((s) => ({ ...s, accounts: normalizeAccounts(s.accounts, s.startingBalance).map((a) => (a.id === id ? { ...a, [key]: v } : a)) }));
@@ -3751,7 +3857,7 @@ export function SettingsPanel({ settings, setSettings, trades, replaceAllData, t
   /* Deleting an account never deletes trades — they move to another account, and
      the modal below says which. A journal has to have somewhere to put a trade,
      so the last account can't be removed at all. */
-  const removeAccount = (id) => {
+  const removeAccount = (id: string) => {
     const remaining = accounts.filter((a) => a.id !== id);
     if (!remaining.length) return;
     const gone = accounts.find((a) => a.id === id);
@@ -3767,15 +3873,15 @@ export function SettingsPanel({ settings, setSettings, trades, replaceAllData, t
   // "Skipped" rows are the ones rowsToTrades drops for having no symbol or no
   // entry price — the user deserves to know their statement wasn't fully read,
   // not just how much of it was.
-  const importSummary = (count, skipped) =>
+  const importSummary = (count: number, skipped: number) =>
     `Imported ${count} trade${count === 1 ? "" : "s"} from CSV.` +
     (skipped ? ` Skipped ${skipped} row${skipped === 1 ? "" : "s"} with no symbol or entry price.` : "");
 
-  const importCsv = (file) => {
+  const importCsv = (file: File) => {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const rows = parseCSV(reader.result);
+        const rows = parseCSV(reader.result as string);
         const newTrades = rowsToTrades(rows, { accountId: activeAccountId || accounts[0].id });
         if (!newTrades.length) { setMsg("No recognizable trade rows found in that CSV."); return; }
         const skipped = rows.length - newTrades.length;
@@ -3785,14 +3891,14 @@ export function SettingsPanel({ settings, setSettings, trades, replaceAllData, t
         if (duplicates.length) { setPendingImport({ all: newTrades, fresh, duplicates, skipped }); return; }
         onImportTrades(newTrades);
         setMsg(importSummary(newTrades.length, skipped));
-      } catch (e) { setMsg("Could not read CSV file: " + e.message); }
+      } catch (e) { setMsg("Could not read CSV file: " + (e as Error).message); }
     };
     reader.readAsText(file);
   };
 
   const exportBackup = async () => {
     setMsg("Gathering screenshots for backup…");
-    const results = await Promise.all(trades.filter((t) => (t.screenshotCount || 0) > 0).map(async (t) => {
+    const results = await Promise.all(trades.filter((t) => (t.screenshotCount || 0) > 0).map(async (t): Promise<[string, ShotDraft[]]> => {
       try { const r = await storage.get(`${SHOTS_PREFIX}${t.id}`, false); return [t.id, r?.value ? JSON.parse(r.value).screenshots : []]; } catch { return [t.id, []]; }
     }));
     const shotsMap = Object.fromEntries(results);
@@ -3814,14 +3920,14 @@ export function SettingsPanel({ settings, setSettings, trades, replaceAllData, t
   // Parse and validate only — the journal is untouched until the user confirms
   // the replacement in the modal below. Restoring is as destructive as Clear
   // All, and used to happen the instant a file was picked.
-  const importBackup = (file) => {
+  const importBackup = (file: File) => {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const parsed = JSON.parse(reader.result);
+        const parsed = JSON.parse(reader.result as string);
         if (!Array.isArray(parsed.trades)) throw new Error("Invalid backup file");
         setPendingRestore(parsed);
-      } catch (e) { setMsg("Could not read backup file: " + e.message); }
+      } catch (e) { setMsg("Could not read backup file: " + (e as Error).message); }
     };
     reader.readAsText(file);
   };
@@ -3984,9 +4090,9 @@ export function SettingsPanel({ settings, setSettings, trades, replaceAllData, t
         <div className="settings-actions">
           <button className="btn btn-ghost" onClick={exportBackup}><Database size={14} /> Download Backup (.json)</button>
           <button className="btn btn-ghost" onClick={() => fileRef.current?.click()}><Upload size={14} /> Restore from Backup</button>
-          <input ref={fileRef} type="file" accept="application/json" hidden onChange={(e) => { if (e.target.files[0]) importBackup(e.target.files[0]); e.target.value = ""; }} />
+          <input ref={fileRef} type="file" accept="application/json" hidden onChange={(e) => { if (e.target.files?.[0]) importBackup(e.target.files[0]); e.target.value = ""; }} />
           <button className="btn btn-ghost" onClick={() => csvRef.current?.click()}><ListPlus size={14} /> Import Trades (CSV)</button>
-          <input ref={csvRef} type="file" accept=".csv,text/csv" hidden onChange={(e) => { if (e.target.files[0]) importCsv(e.target.files[0]); e.target.value = ""; }} />
+          <input ref={csvRef} type="file" accept=".csv,text/csv" hidden onChange={(e) => { if (e.target.files?.[0]) importCsv(e.target.files[0]); e.target.value = ""; }} />
         </div>
         <p className="hint" style={{ marginTop: 8 }}>CSV import recognizes common MT4/MT5, Binance and TradingView export column names (Symbol/Pair, Type/Side, Open/Close Price, Open/Close Time, Size/Lots, S/L, T/P, Commission).</p>
         {msg && <div className="form-note">{msg}</div>}
@@ -4080,7 +4186,7 @@ function LiveClock({ format = "12h" }) {
    the stored PBKDF2 hash in ./lib/auth. Web-future: swap onLogin's local verify
    for a network call and this screen is unchanged (see ARCHITECTURE.md § Auth).
 ============================================================================ */
-function PasswordInput({ value, onChange, placeholder, autoFocus, onEnter }) {
+function PasswordInput({ value, onChange, placeholder, autoFocus, onEnter }: { value: string; onChange: (v: string) => void; placeholder?: string; autoFocus?: boolean; onEnter?: () => void }) {
   const [show, setShow] = useState(false);
   return (
     <div className="auth-pw-wrap">
@@ -4096,7 +4202,7 @@ function PasswordInput({ value, onChange, placeholder, autoFocus, onEnter }) {
   );
 }
 // Exported for the component smoke tests (App.test.jsx).
-export function AuthGate({ users, journalName, onAuthenticated }) {
+export function AuthGate({ users, journalName, onAuthenticated }: { users: AuthUser[]; journalName?: string; onAuthenticated: (user: AuthUser) => void }) {
   const [username, setUsername] = useState(users.length === 1 ? users[0].username : "");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -4142,13 +4248,15 @@ export function AuthGate({ users, journalName, onAuthenticated }) {
 // Settings > Security: create the first account (turns the gate on), add more
 // users, or remove them (removing the last turns the gate off). This is the
 // only place accounts are created — the gate itself never self-registers.
-function SecurityPanel({ users, setUsers, currentUser, onAuthenticated }) {
+function SecurityPanel({ users, setUsers, currentUser, onAuthenticated }: {
+  users: AuthUser[]; setUsers: Dispatch<SetStateAction<AuthUser[]>>; currentUser?: AuthUser | null; onAuthenticated?: (user: AuthUser) => void;
+}) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [removeUser, setRemoveUser] = useState(null);
+  const [removeUser, setRemoveUser] = useState<AuthUser | null>(null);
 
   const addUser = async () => {
     setError("");
@@ -4166,10 +4274,10 @@ function SecurityPanel({ users, setUsers, currentUser, onAuthenticated }) {
       // creator in so they aren't bounced to the login screen mid-session; the
       // gate then only appears on a fresh launch, as intended.
       if (firstAccount) onAuthenticated?.(user);
-    } catch (e) { setError(e?.message || "Could not create account."); }
+    } catch (e) { setError((e as Error)?.message || "Could not create account."); }
     finally { setBusy(false); }
   };
-  const doRemove = (id) => setUsers((list) => normalizeUsers(list).filter((u) => u.id !== id));
+  const doRemove = (id: string) => setUsers((list) => normalizeUsers(list).filter((u) => u.id !== id));
 
   return (
     <Panel title="Security — login gate" className="settings-section">
@@ -4229,46 +4337,48 @@ const NAV = [
   { key: "help", label: "Help", icon: LifeBuoy },
 ];
 
+type EditingTrade = (Partial<ComputedTrade> & { screenshots?: ShotDraft[]; _loadingShots?: boolean }) | null;
+interface Toast { id: string; message: string; tone?: string; actionLabel?: string; duration?: number; onAction?: () => void; }
 function AppShell() {
   const [theme, setTheme] = useState("dark");
-  const [trades, setTrades] = useState([]);
-  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
-  const [strategies, setStrategies] = useState(DEFAULT_STRATEGIES);
-  const [lastDefaults, setLastDefaults] = useState({});
+  const [trades, setTrades] = useState<Trade[]>([]);
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [strategies, setStrategies] = useState<string[]>(DEFAULT_STRATEGIES);
+  const [lastDefaults, setLastDefaults] = useState<Record<string, unknown>>({});
   // Highest trade-id sequence ever issued in this journal. Persisted with meta,
   // so a number is retired for good rather than being freed by deleting the
   // trade that held it — see nextTradeId in lib/trade.js.
   const [tradeSeqHigh, setTradeSeqHigh] = useState(0);
-  const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES);
+  const [preferences, setPreferences] = useState<Preferences>(DEFAULT_PREFERENCES);
   const [loaded, setLoaded] = useState(false);
   // Login gate. `users` is the registered accounts (empty = gate off); `authUser`
   // is the session's signed-in user, held in memory only so closing the app
   // signs out. `authLoaded` gates the first render on the auth store having been
   // read, so the app never flashes past the gate before users load.
-  const [users, setUsers] = useState([]);
-  const [authUser, setAuthUser] = useState(null);
+  const [users, setUsers] = useState<AuthUser[]>([]);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authLoaded, setAuthLoaded] = useState(false);
   const [tab, setTabState] = useState("dashboard");
   const [showForm, setShowForm] = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [viewing, setViewing] = useState(null);
-  const [seedTrade, setSeedTrade] = useState(null);
+  const [editing, setEditing] = useState<EditingTrade>(null);
+  const [viewing, setViewing] = useState<EditingTrade>(null);
+  const [seedTrade, setSeedTrade] = useState<Partial<Trade> | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
-  const [deleteId, setDeleteId] = useState(null);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
   // Ids awaiting bulk-delete confirmation. Held separately from deleteId so the
   // single-trade and batch confirmations can word themselves differently.
-  const [bulkDeleteIds, setBulkDeleteIds] = useState(null);
+  const [bulkDeleteIds, setBulkDeleteIds] = useState<string[] | null>(null);
   // Set when trades could not be read at startup. Persisting is disabled while
   // this is set — see the save effect below.
-  const [loadError, setLoadError] = useState(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   // Serialised contents of each shard as last written to storage, keyed by shard
   // index. Lets the save effect below skip shards that haven't changed.
-  const writtenShardsRef = useRef({});
+  const writtenShardsRef = useRef<Record<number, string | null>>({});
   const filters = preferences.filters;
   // Stable identity: FiltersBar debounces search through this, and a new function
   // each render would restart that timer on every render.
-  const setFilters = useCallback((updater) => setPreferences((p) => ({ ...p, filters: typeof updater === "function" ? updater(p.filters) : updater })), []);
+  const setFilters = useCallback((updater: SetStateAction<Filters>) => setPreferences((p) => ({ ...p, filters: typeof updater === "function" ? updater(p.filters) : updater })), []);
 
   /* Tab history — the back/forward arrows walk this, browser-style. Kept in
      memory only: restoring a stale history across restarts would let Back lead
@@ -4284,7 +4394,7 @@ function AppShell() {
      so the state updates must have committed by then, not sit in React's queue.
      Skipped entirely under prefers-reduced-motion; the fallback is the plain
      synchronous update the app always did. */
-  const withTabTransition = useCallback((apply) => {
+  const withTabTransition = useCallback((apply: () => void) => {
     if (typeof document.startViewTransition === "function" && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       document.startViewTransition(() => { flushSync(apply); });
     } else {
@@ -4294,7 +4404,7 @@ function AppShell() {
   // Memoized on `tab` (its same-tab check reads it) so the keydown effect
   // below, which now dispatches Ctrl+1..6 through here, re-subscribes only on
   // an actual navigation rather than every render.
-  const setTab = useCallback((next) => {
+  const setTab = useCallback((next: string) => {
     // Re-selecting the current tab is not a navigation; recording it would make
     // Back appear to do nothing for one press.
     if (next === tab) return;
@@ -4311,7 +4421,7 @@ function AppShell() {
   // came from stays reachable in the other direction. Identity changes only when
   // history itself does — i.e. on an actual navigation, not on every render —
   // so the keydown listener below re-subscribes rarely.
-  const goHistory = useCallback((delta) => {
+  const goHistory = useCallback((delta: number) => {
     const idx = navHistory.index + delta;
     if (idx < 0 || idx >= navHistory.stack.length) return;
     const next = navHistory.stack[idx];
@@ -4323,14 +4433,14 @@ function AppShell() {
   }, [navHistory, withTabTransition]);
   const sidebarCollapsed = !!preferences.sidebarCollapsed;
   const toggleSidebar = useCallback(() => setPreferences((p) => ({ ...p, sidebarCollapsed: !p.sidebarCollapsed })), []);
-  const setChartMode = useCallback((next) => setPreferences((p) => ({ ...p, chartMode: next })), []);
-  const [dayFilter, setDayFilter] = useState(null);
+  const setChartMode = useCallback((next: string) => setPreferences((p) => ({ ...p, chartMode: next })), []);
+  const [dayFilter, setDayFilter] = useState<string | null>(null);
 
   // Transient notifications. pushToast returns nothing the callers need; a toast
   // with an actionLabel (e.g. Undo) dwells longer before auto-dismissing.
-  const [toasts, setToasts] = useState([]);
-  const dismissToast = useCallback((id) => setToasts((ts) => ts.filter((t) => t.id !== id)), []);
-  const pushToast = useCallback((toast) => {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const dismissToast = useCallback((id: string) => setToasts((ts) => ts.filter((t) => t.id !== id)), []);
+  const pushToast = useCallback((toast: Omit<Toast, "id">) => {
     const id = uid("TOAST");
     const duration = toast.duration ?? (toast.actionLabel ? 6500 : 3200);
     setToasts((ts) => [...ts, { ...toast, id }]);
@@ -4370,7 +4480,7 @@ function AppShell() {
   // A focused number input treats the wheel as a value change, so scrolling the
   // page over one silently rewrites a price. Blur instead and let the page scroll.
   useEffect(() => {
-    const onWheel = (e) => {
+    const onWheel = (e: globalThis.WheelEvent) => {
       const el = document.activeElement;
       if (el instanceof HTMLInputElement && el.type === "number" && el === e.target) el.blur();
     };
@@ -4408,15 +4518,15 @@ function AppShell() {
         const list = await storage.list(SHARD_PREFIX, false);
         const keys = list?.keys || [];
         const results = await Promise.all(keys.map((k) => storage.get(k, false).catch(() => null)));
-        let all = [];
+        let all: Trade[] = [];
         // Seed the write baseline with what's already on disk, so the first save
         // after boot doesn't rewrite every shard just to reproduce it. This also
         // means a shard that failed to load keeps its baseline of null and is
         // left untouched on save, rather than being deleted to match memory.
-        const seeded = {};
+        const seeded: Record<number, string | null> = {};
         keys.forEach((k, i) => {
           const idx = Number(k.slice(SHARD_PREFIX.length));
-          if (Number.isInteger(idx) && results[i]?.value) seeded[idx] = results[i].value;
+          if (Number.isInteger(idx) && results[i]?.value) seeded[idx] = results[i]!.value;
         });
         for (let i = 0; i < SHARD_COUNT; i++) if (!(i in seeded)) seeded[i] = null;
         writtenShardsRef.current = seeded;
@@ -4432,7 +4542,7 @@ function AppShell() {
         // below, because an empty `trades` would otherwise be written back as
         // "no trades" and delete every shard on disk.
         console.error("Could not read trades from storage", e);
-        if (mounted) setLoadError(e?.message || String(e));
+        if (mounted) setLoadError((e as Error)?.message || String(e));
       }
       if (mounted) setLoaded(true);
     })();
@@ -4482,11 +4592,11 @@ function AppShell() {
     // wrong reason, and writing that back deletes every shard on disk.
     if (!loaded || loadError) return;
     const timeout = setTimeout(async () => {
-      const groups = {};
+      const groups: Record<number, Trade[]> = {};
       trades.forEach((tr) => { const sh = shardOf(tr.id); (groups[sh] = groups[sh] || []).push(tr); });
       // Only touch shards whose serialised contents actually changed: a single
       // trade edit lands in one shard, so this writes one key instead of all 24.
-      const pending = [];
+      const pending: { i: number; payload: string | null }[] = [];
       for (let i = 0; i < SHARD_COUNT; i++) {
         const arr = groups[i];
         const payload = arr?.length ? JSON.stringify(arr) : null;
@@ -4507,8 +4617,8 @@ function AppShell() {
   }, [trades, loaded, loadError]);
 
   useEffect(() => {
-    const onKey = (e) => {
-      const tag = document.activeElement?.tagName?.toLowerCase();
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      const tag = (document.activeElement as HTMLElement | null)?.tagName?.toLowerCase();
       const typing = tag === "input" || tag === "textarea" || tag === "select";
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "n" && !typing) { e.preventDefault(); setEditing(null); setSeedTrade(null); setShowForm(true); }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b" && !typing) { e.preventDefault(); toggleSidebar(); }
@@ -4562,7 +4672,7 @@ function AppShell() {
   // matches no trades and reading as an empty journal.
   const activeAccount = accounts.find((a) => a.id === preferences.activeAccountId) || null;
   const activeAccountId = activeAccount?.id || "";
-  const setActiveAccountId = useCallback((id) => setPreferences((p) => ({ ...p, activeAccountId: id })), []);
+  const setActiveAccountId = useCallback((id: string) => setPreferences((p) => ({ ...p, activeAccountId: id })), []);
 
   const computedTrades = useMemo(
     () => trades.map((t) => {
@@ -4601,15 +4711,15 @@ function AppShell() {
     return scopedTrades.filter((t) => {
       if (dayFilter && isoDate(t.exitDateTime) !== dayFilter) return false;
       const dateForFilter = t.exitDateTime || t.entryDateTime;
-      if ((range.from || range.to) && !dateInRange(dateForFilter, range.from, range.to)) return false;
+      if ((range.from || range.to) && !dateInRange(dateForFilter, range.from || "", range.to || "")) return false;
       if (filters.status && t.status !== filters.status) return false;
       if (filters.asset && t.symbol !== filters.asset) return false;
       if (filters.strategy && t.strategy !== filters.strategy) return false;
       if (filters.marketType && t.marketType !== filters.marketType) return false;
       if (filters.direction && t.direction !== filters.direction) return false;
       if (filters.result && t.result !== filters.result) return false;
-      if (filters.rrMin && (t.actualRR === null || t.actualRR < num(filters.rrMin))) return false;
-      if (filters.rrMax && (t.actualRR === null || t.actualRR > num(filters.rrMax))) return false;
+      if (filters.rrMin && (t.actualRR === null || t.actualRR < num(filters.rrMin, 0))) return false;
+      if (filters.rrMax && (t.actualRR === null || t.actualRR > num(filters.rrMax, 0))) return false;
       if (filters.tag && !(t.tags || []).includes(filters.tag)) return false;
       // Same breadth as the command palette's trade search — id, tags and
       // account included, so anything findable there is findable here.
@@ -4621,7 +4731,7 @@ function AppShell() {
   // Whether the current view is narrowed at all — drives the Reports panel's
   // "export all vs. export current filter" choice.
   const filtersActive = useMemo(
-    () => !!dayFilter || Object.keys(DEFAULT_FILTERS).some((k) => filters[k] !== DEFAULT_FILTERS[k]),
+    () => !!dayFilter || (Object.keys(DEFAULT_FILTERS) as (keyof Filters)[]).some((k) => filters[k] !== DEFAULT_FILTERS[k]),
     [filters, dayFilter]
   );
 
@@ -4631,8 +4741,8 @@ function AppShell() {
   const assets = useMemo(() => [...new Set(scopedTrades.map((t) => t.symbol).filter(Boolean))].sort(), [scopedTrades]);
   const allTags = useMemo(() => [...new Set(scopedTrades.flatMap((t) => t.tags || []))].sort(), [scopedTrades]);
   const openCount = useMemo(() => scopedTrades.filter((t) => t.status === "Open").length, [scopedTrades]);
-  const symbolStats = useMemo(() => {
-    const map = {};
+  const symbolStats = useMemo((): SymbolStat[] => {
+    const map: Record<string, number> = {};
     scopedTrades.forEach((t) => {
       const symbol = (t.symbol || "").trim().toUpperCase();
       if (!symbol) return;
@@ -4641,12 +4751,12 @@ function AppShell() {
     return Object.entries(map).map(([symbol, count]) => ({ symbol, count }));
   }, [scopedTrades]);
 
-  const saveTrade = async (form) => {
-    const finalId = editing ? form.id : nextTradeId(trades, tradeSeqHigh);
+  const saveTrade = async (form: FormTrade) => {
+    const finalId = editing ? (form.id as string) : nextTradeId(trades, tradeSeqHigh);
     const screenshots = form.screenshots || [];
     // stripComputed: the form edits a computed trade, and every derived figure on
     // it is recalculated on read — writing them back would store a stale copy.
-    const core = { ...stripComputed(form), id: finalId, screenshotCount: screenshots.length };
+    const core = { ...stripComputed(form), id: finalId, screenshotCount: screenshots.length } as Omit<Trade, "screenshots"> & { screenshotCount: number; screenshots?: ShotDraft[] };
     if (!core.accountId || !accounts.some((a) => a.id === core.accountId)) core.accountId = activeAccountId || accounts[0].id;
     delete core.screenshots;
     // Retire the number before the record exists, so an Undo of a later delete
@@ -4665,13 +4775,13 @@ function AppShell() {
     pushToast({ message: `${wasEditing ? "Updated" : "Saved"} ${core.symbol || finalId}`, tone: "profit" });
   };
 
-  const deleteTrade = (id) => setDeleteId(id);
-  const confirmDelete = async (id) => {
+  const deleteTrade = (id: string) => setDeleteId(id);
+  const confirmDelete = async (id: string) => {
     const trade = trades.find((t) => t.id === id);
     if (!trade) return;
     // Capture the screenshots before the storage key is deleted, so Undo can put
     // both the record and its images back exactly as they were.
-    let shots = [];
+    let shots: ShotDraft[] = [];
     if ((trade.screenshotCount || 0) > 0) {
       try { const r = await storage.get(`${SHOTS_PREFIX}${id}`, false); shots = r?.value ? JSON.parse(r.value).screenshots : []; }
       catch { /* images unreadable — restore the record without them */ }
@@ -4695,11 +4805,11 @@ function AppShell() {
 
   // Bulk delete mirrors confirmDelete, but captures every record and its images
   // up front so a single Undo restores the whole batch as it was.
-  const confirmBulkDelete = async (ids) => {
+  const confirmBulkDelete = async (ids: string[]) => {
     const idSet = new Set(ids);
     const doomed = trades.filter((t) => idSet.has(t.id));
     if (!doomed.length) return;
-    const shotsById = {};
+    const shotsById: Record<string, ShotDraft[]> = {};
     await Promise.all(doomed.map(async (t) => {
       if ((t.screenshotCount || 0) === 0) return;
       try { const r = await storage.get(`${SHOTS_PREFIX}${t.id}`, false); if (r?.value) shotsById[t.id] = JSON.parse(r.value).screenshots; }
@@ -4707,7 +4817,7 @@ function AppShell() {
     }));
     setTrades((prev) => prev.filter((t) => !idSet.has(t.id)));
     doomed.forEach((t) => storage.delete(`${SHOTS_PREFIX}${t.id}`, false).catch(() => {}));
-    setViewing((v) => (v && idSet.has(v.id) ? null : v));
+    setViewing((v) => (v && v.id && idSet.has(v.id) ? null : v));
     pushToast({
       message: `Deleted ${doomed.length} trade${doomed.length > 1 ? "s" : ""}`,
       tone: "danger",
@@ -4728,13 +4838,13 @@ function AppShell() {
   // Bulk field edit from the table's selection bar — move to an account, set a
   // strategy. Trades are replaced, never mutated, so computeTrade's WeakMap
   // cache re-derives exactly the rows touched.
-  const bulkEdit = (ids, patch, label) => {
+  const bulkEdit = (ids: string[], patch: Record<string, unknown>, label: string) => {
     const idSet = new Set(ids);
     setTrades((prev) => prev.map((t) => (idSet.has(t.id) ? { ...stripComputed(t), ...patch } : t)));
     pushToast({ message: `${ids.length} trade${ids.length > 1 ? "s" : ""} ${label}`, tone: "accent" });
   };
 
-  const openEdit = async (t) => {
+  const openEdit = async (t: ComputedTrade) => {
     setEditing({ ...t, screenshots: [], _loadingShots: (t.screenshotCount || 0) > 0 });
     setShowForm(true);
     if ((t.screenshotCount || 0) > 0) {
@@ -4745,7 +4855,7 @@ function AppShell() {
       } catch { setEditing((e) => (e && e.id === t.id ? { ...e, _loadingShots: false } : e)); }
     }
   };
-  const openView = async (t) => {
+  const openView = async (t: ComputedTrade) => {
     setViewing({ ...t, screenshots: [], _loadingShots: (t.screenshotCount || 0) > 0 });
     if ((t.screenshotCount || 0) > 0) {
       try {
@@ -4756,7 +4866,7 @@ function AppShell() {
     }
   };
 
-  const openCopy = (t) => {
+  const openCopy = (t: ComputedTrade) => {
     setViewing(null);
     setEditing(null);
     // A copy is the same setup taken again, so it starts open and un-exited.
@@ -4766,7 +4876,7 @@ function AppShell() {
     setShowForm(true);
   };
 
-  const importTrades = (newTrades) => {
+  const importTrades = (newTrades: Trade[]) => {
     // Imported rows land in the account on screen. With "All Accounts" in view
     // there is no such account, so they go to the first rather than nowhere.
     const targetId = activeAccountId || accounts[0].id;
@@ -4778,10 +4888,10 @@ function AppShell() {
     const withIds = newTrades.map((t) => {
       const id = nextTradeId(running, floor);
       floor = tradeSeq(id);
-      const core = { ...t, id, accountId: t.accountId || targetId, screenshotCount: 0 };
+      const core: Partial<Trade> = { ...t, id, accountId: t.accountId || targetId, screenshotCount: 0 };
       delete core.screenshots;
-      running.push(core);
-      return core;
+      running.push(core as Trade);
+      return core as Trade;
     });
     setTradeSeqHigh(floor);
     setTrades((prev) => [...prev, ...withIds]);
@@ -4821,7 +4931,7 @@ function AppShell() {
   // the APP_CSS constant, so a theme switch rebuilds a few hundred bytes rather
   // than the whole stylesheet.
   const themeCss = useMemo(() => {
-    const tokens = THEMES[theme]?.tokens || TOKENS_DARK;
+    const tokens = THEMES[theme as keyof typeof THEMES]?.tokens || TOKENS_DARK;
     return `.app-root { ${Object.entries(tokens).map(([k, v]) => `${k}: ${v};`).join("")} }`;
   }, [theme]);
   /* Accent override (Settings > Appearance). Injected after themeCss on the
@@ -5030,15 +5140,15 @@ function AppShell() {
               activeAccountId={activeAccountId} setActiveAccountId={setActiveAccountId}
               users={users} setUsers={setUsers} currentUser={signedIn ? authUser : null} onAuthenticated={setAuthUser}
               preferences={preferences} setPreferences={setPreferences}
-              replaceAllData={async (s, t, strat) => {
+              replaceAllData={async (s: Settings, t: Trade[], strat: string[]) => {
                 // mergeSettings: a restored backup can predate accounts entirely,
                 // and everything downstream indexes into settings.accounts.
                 setSettings(mergeSettings(s));
                 if (strat) setStrategies(strat);
-                const shotsById = {};
-                const coreTrades = t.map((tr) => {
+                const shotsById: Record<string, ShotDraft[]> = {};
+                const coreTrades = t.map((tr: Any) => {
                   const { screenshots, ...rest } = tr;
-                  const core = stripComputed(rest);
+                  const core = stripComputed(rest) as Trade & { screenshotCount?: number };
                   shotsById[core.id] = screenshots || [];
                   return { ...core, screenshotCount: screenshots?.length || core.screenshotCount || 0 };
                 });
@@ -5070,7 +5180,7 @@ function AppShell() {
           accounts={accounts}
           // A new trade belongs to the account being looked at. In the pooled
           // view there isn't one, so it falls back to where the last trade went.
-          defaultAccountId={activeAccountId || lastDefaults.accountId || accounts[0].id}
+          defaultAccountId={activeAccountId || (lastDefaults.accountId as string) || accounts[0].id}
           onClose={() => { setShowForm(false); setEditing(null); setSeedTrade(null); }}
           onSave={saveTrade}
         />
@@ -5079,11 +5189,11 @@ function AppShell() {
       {deleteId && (
         <ConfirmModal
           title="Delete Trade" danger confirmLabel="Delete"
-          message={`Delete ${deleteId}${trades.find((t) => t.id === deleteId)?.symbol ? ` (${trades.find((t) => t.id === deleteId).symbol})` : ""} and any screenshots attached to it? You can undo this from the notification straight afterwards.`}
+          message={`Delete ${deleteId}${trades.find((t) => t.id === deleteId)?.symbol ? ` (${trades.find((t) => t.id === deleteId)?.symbol})` : ""} and any screenshots attached to it? You can undo this from the notification straight afterwards.`}
           onConfirm={() => confirmDelete(deleteId)} onClose={() => setDeleteId(null)}
         />
       )}
-      {bulkDeleteIds?.length > 0 && (
+      {bulkDeleteIds && bulkDeleteIds.length > 0 && (
         <ConfirmModal
           title={`Delete ${bulkDeleteIds.length} Trade${bulkDeleteIds.length > 1 ? "s" : ""}`} danger
           confirmLabel={`Delete ${bulkDeleteIds.length}`}
@@ -5095,7 +5205,7 @@ function AppShell() {
         <CommandPalette
           actions={paletteActions}
           trades={computedTrades}
-          onOpenTrade={(t) => { setShowPalette(false); openView(t); }}
+          onOpenTrade={(t: ComputedTrade) => { setShowPalette(false); openView(t); }}
           onClose={() => setShowPalette(false)}
         />
       )}
@@ -5117,7 +5227,7 @@ export default function App() {
 /* Transient bottom-right notifications. Some carry an action (e.g. Undo a
    delete); those get a longer dwell before auto-dismiss, set where they are
    pushed. Dismissing runs the same removal the timer would. */
-function ToastHost({ toasts, onDismiss }) {
+function ToastHost({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: string) => void }) {
   if (!toasts.length) return null;
   return (
     <div className="toast-host">
@@ -5133,7 +5243,7 @@ function ToastHost({ toasts, onDismiss }) {
     </div>
   );
 }
-function KeyboardShortcutsModal({ onClose }) {
+function KeyboardShortcutsModal({ onClose }: { onClose: () => void }) {
   const rows = [
     ["Ctrl / Cmd + K", "Command palette — actions, tabs, themes, trade search"],
     ["Ctrl / Cmd + N", "New trade"],
@@ -5167,21 +5277,23 @@ function KeyboardShortcutsModal({ onClose }) {
    With no query only the leading actions show — themes and trades surface once
    there is something to match, so the idle list stays short. Trades searched
    are the whole journal, not the scoped account: the palette is a global jump. */
-function CommandPalette({ actions, trades, onOpenTrade, onClose }) {
+interface PaletteAction { key: string; label: string; hint?: string; icon: LucideIcon; haystack: string; run: () => void; }
+type PaletteItem = { kind: "action"; key: string; haystack: string; action: PaletteAction } | { kind: "trade"; key: string; haystack: string; trade: ComputedTrade };
+function CommandPalette({ actions, trades, onOpenTrade, onClose }: { actions: PaletteAction[]; trades: ComputedTrade[]; onOpenTrade: (t: ComputedTrade) => void; onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [sel, setSel] = useState(0);
-  const listRef = useRef(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   // Freeze the page behind the overlay, same as Modal — through the same
   // shared lock, since the palette can be opened on top of a modal and the two
   // locks must not fight over restoring document.body.style.overflow.
   useBodyScrollLock();
 
-  const results = useMemo(() => {
+  const results = useMemo((): PaletteItem[] => {
     const q = query.trim();
-    const actionItems = actions.map((a) => ({ kind: "action", key: a.key, haystack: a.haystack, action: a }));
+    const actionItems: PaletteItem[] = actions.map((a) => ({ kind: "action", key: a.key, haystack: a.haystack, action: a }));
     if (!q) return actionItems.slice(0, 9);
-    const tradeItems = trades.map((t) => ({
+    const tradeItems: PaletteItem[] = trades.map((t) => ({
       kind: "trade", key: t.id,
       haystack: `${t.id} ${t.symbol} ${t.direction || ""} ${t.status || ""} ${t.marketType || ""} ${t.strategy || ""} ${(t.tags || []).join(" ")} ${t._accountName || ""}`,
       trade: t,
@@ -5192,12 +5304,12 @@ function CommandPalette({ actions, trades, onOpenTrade, onClose }) {
   // Keep the highlighted row visible while arrowing through a scrolled list.
   useEffect(() => { listRef.current?.children[sel]?.scrollIntoView({ block: "nearest" }); }, [sel]);
 
-  const run = (item) => {
+  const run = (item: PaletteItem | undefined) => {
     if (!item) return;
     if (item.kind === "trade") onOpenTrade(item.trade);
     else { onClose(); item.action.run(); }
   };
-  const onKeyDown = (e) => {
+  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => Math.min(s + 1, results.length - 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setSel((s) => Math.max(s - 1, 0)); }
     else if (e.key === "Enter") { e.preventDefault(); run(results[sel]); }
@@ -5251,7 +5363,7 @@ function CommandPalette({ actions, trades, onOpenTrade, onClose }) {
   );
 }
 
-function MobileNav({ title }) {
+function MobileNav({ title }: { title?: string }) {
   return (
     <div className="mobile-topnav">
       <button className="icon-btn" onClick={() => document.getElementById("app-sidebar")?.classList.toggle("open")}><LayoutDashboard size={16} /></button>

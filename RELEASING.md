@@ -31,7 +31,7 @@ Distribution is a **manual download** of an NSIS installer built on this machine
 define: { __APP_VERSION__: JSON.stringify(pkg.version) }
 ```
 
-Settings > About reads that, so it cannot drift. It used to be typed into App.jsx by hand and did drift — the About panel read 2.1 while the installer built 2.1.0. `__APP_VERSION__` is declared as a global in `eslint.config.js` because it never exists as a real binding.
+Settings > About reads that, so it cannot drift. It used to be typed into App.tsx by hand and did drift — the About panel read 2.1 while the installer built 2.1.0. `__APP_VERSION__` is declared as a global in `eslint.config.js` because it never exists as a real binding.
 
 ### `name: "tradingjournal"` is load-bearing
 
