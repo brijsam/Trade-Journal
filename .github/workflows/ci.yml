@@ -27,3 +27,7 @@ jobs:
       # that pin is load-bearing (TESTING.md): on a UTC runner the historical
       # day-bucketing bugs pass silently.
       - run: npm test
+      # Coverage thresholds (vite.config.js `test.coverage.thresholds`) are
+      # scoped to src/lib/** — vitest run --coverage exits non-zero if they
+      # regress. Same TZ pin as npm test, same reason.
+      - run: npm run test:coverage

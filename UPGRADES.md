@@ -195,7 +195,7 @@ showed no visual or console regressions.
 
 ---
 
-## ⬜ Batch #5 — Coverage tooling + threshold
+## ✅ Batch #5 — Coverage tooling + threshold (2026-07-22)
 
 **Why:** actual test coverage is currently unknown and unenforced — no
 tooling reports it, nothing in CI gates on it.

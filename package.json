@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit",
     "test": "cross-env TZ=Asia/Kolkata vitest run",
     "test:watch": "cross-env TZ=Asia/Kolkata vitest",
+    "test:coverage": "cross-env TZ=Asia/Kolkata vitest run --coverage",
     "preview": "vite preview",
     "electron:dev": "concurrently -k \"npm:dev\" \"wait-on tcp:5173 && cross-env NODE_ENV=development electron .\"",
     "dist": "npm run build && electron-builder"
@@ -35,6 +36,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
+    "@vitest/coverage-v8": "^4.1.10",
     "concurrently": "^10.0.3",
     "cross-env": "^10.1.0",
     "electron": "^43.1.0",

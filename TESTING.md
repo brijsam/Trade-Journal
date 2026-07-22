@@ -3,11 +3,22 @@
 ```bash
 npm test                            # whole suite, once
 npm run test:watch                  # re-run on save
+npm run test:coverage               # whole suite + coverage report (text/html/lcov)
 npx vitest run -t "aggregateLegs"   # one test or describe block, matched by name
 npx vitest run src/lib/trade.test.js
 ```
 
-Runner is [vitest](https://vitest.dev). No config file — vitest reads `vite.config.js`, so `__APP_VERSION__` and the React plugin apply automatically.
+Runner is [vitest](https://vitest.dev). No config file — vitest reads `vite.config.js`, so `__APP_VERSION__` and the React plugin apply automatically. Same file carries `test.coverage`.
+
+## Coverage
+
+`npm run test:coverage` runs the v8 provider and writes `coverage/` (gitignored — `text`/`html`/`lcov` reporters, open `coverage/index.html` for the line-by-line view). CI runs it on every push/PR as a separate step after `npm test`.
+
+Thresholds live in `vite.config.js` (`test.coverage.thresholds`) and are scoped to `src/lib/**` — the pure-logic layer (`trade.ts`, `auth.ts`, `format.ts`), where coverage is both meaningful and achievable. `App.tsx`/`Charts.tsx` are excluded from `include` entirely: they're UI-heavy React trees already exercised by `App.test.jsx`/`App.integration.test.jsx`, not a place a blanket line-coverage number says anything useful.
+
+`storage.ts` is inside `src/lib/` but excluded from the threshold (still shows in the text report). Unlike `trade.ts`/`auth.ts` — explicitly "no storage" per this file's own architecture — `storage.ts` *is* the storage/IPC boundary: thin pass-through to IndexedDB or `window.electronStorage` that a unit test can't exercise without reimplementing a fake IndexedDB. It's already covered end-to-end via the mocked backend in `App.integration.test.jsx`.
+
+Current numbers on the scoped set (`trade.ts` + `auth.ts` + `format.ts`): ~97% statements, ~90% branches, ~99% functions/lines. Thresholds are set a little under that so incidental drift doesn't fail CI on unrelated PRs — a real coverage regression will still trip them.
 
 Three suites, two environments:
 

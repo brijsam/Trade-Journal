@@ -24,6 +24,7 @@ npm run electron:dev   # desktop shell — data in real files, native Save As
 | `npm run typecheck` | `tsc --noEmit` alone |
 | `npm test` | vitest — fully green expected, see below |
 | `npm run test:watch` | vitest, re-running on save |
+| `npm run test:coverage` | vitest + coverage report, thresholds scoped to `src/lib/**` |
 
 ## Where your data lives
 

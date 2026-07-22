@@ -16,4 +16,28 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
+  // Coverage is scoped to src/lib/** — the pure-logic layer, where coverage
+  // is both meaningful and achievable. App.tsx/Charts.tsx are UI-heavy React
+  // trees already covered by component/integration tests, not a place a
+  // blanket line-coverage threshold says anything useful. storage.ts is
+  // reported but excluded from the threshold itself: unlike trade.ts/auth.ts
+  // (explicitly "no storage" per CLAUDE.md), it *is* the storage/IPC
+  // boundary — thin pass-through to IndexedDB / window.electronStorage that
+  // unit tests can't meaningfully exercise without reimplementing a fake
+  // IndexedDB, and it's already covered end-to-end via the mocked backend in
+  // App.integration.test.jsx.
+  test: {
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "html", "lcov"],
+      include: ["src/lib/**"],
+      exclude: ["src/lib/**/*.test.*", "src/lib/storage.ts"],
+      thresholds: {
+        lines: 90,
+        functions: 85,
+        branches: 85,
+        statements: 90,
+      },
+    },
+  },
 });
