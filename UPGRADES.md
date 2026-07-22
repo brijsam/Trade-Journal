@@ -30,7 +30,7 @@ first, TypeScript last — it's the biggest effort).
 
 ---
 
-## ⬜ Batch #1 — React ErrorBoundary
+## ✅ Batch #1 — React ErrorBoundary (2026-07-22)
 
 **Why:** one render throw currently white-screens the whole app; no recovery
 path exists at the React level (only the boot-time `loadError` screen covers

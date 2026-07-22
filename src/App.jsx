@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense, createContext, useContext } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense, createContext, useContext, Component } from "react";
 // flushSync only wraps tab-switch state updates inside document.startViewTransition,
 // which needs the DOM updated synchronously inside its callback to snapshot it.
 import { flushSync } from "react-dom";
@@ -729,6 +729,44 @@ const BOOT_CSS = `
 .btn { display: inline-flex; align-items: center; gap: 6px; font-family: 'Inter', sans-serif; font-size: 12.5px; font-weight: 600; border-radius: 8px; padding: 8px 13px; border: 1px solid transparent; cursor: pointer; margin-top: 6px; }
 .btn-primary { background: var(--accent); color: #061019; }
 `;
+
+// Fixed to the dark theme rather than reading the user's preference: a render
+// throw can happen before (or because of) the state that preference lives in,
+// so the boundary can't trust anything above it in the tree.
+const BOOT_ERROR_THEME_CSS = `.app-root { ${Object.entries(TOKENS_DARK).map(([k, v]) => `${k}: ${v};`).join("")} }`;
+
+// The one class component this codebase needs — everything else is functions.
+// componentDidCatch/getDerivedStateFromError have no hook equivalent. Catches
+// render-time throws anywhere below it; does not touch storage or trades, so
+// a render bug never masquerades as a data-loss bug the way a swallowed
+// loadError would.
+export class ErrorBoundary extends Component {
+  state = { error: null };
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    console.error("Render error caught by ErrorBoundary:", error, info.componentStack);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="app-root app-booting">
+          <style>{BOOT_ERROR_THEME_CSS}</style>
+          <style>{BOOT_CSS}</style>
+          <div className="boot-error">
+            <AlertTriangle size={20} style={{ color: "var(--loss)" }} />
+            <h3>Something went wrong</h3>
+            <p>The app hit an unexpected error while rendering. Your saved trades are untouched — reload to try again.</p>
+            <p className="mono boot-error-detail">{String(this.state.error?.message || this.state.error)}</p>
+            <button className="btn btn-primary" onClick={() => window.location.reload()}><RotateCcw size={14} /> Reload</button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 
 /* ============================================================================
@@ -4191,7 +4229,7 @@ const NAV = [
   { key: "help", label: "Help", icon: LifeBuoy },
 ];
 
-export default function App() {
+function AppShell() {
   const [theme, setTheme] = useState("dark");
   const [trades, setTrades] = useState([]);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -5067,6 +5105,15 @@ export default function App() {
     </TimezoneContext.Provider>
   );
 }
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppShell />
+    </ErrorBoundary>
+  );
+}
+
 /* Transient bottom-right notifications. Some carry an action (e.g. Undo a
    delete); those get a longer dwell before auto-dismiss, set where they are
    pushed. Dismissing runs the same removal the timer would. */

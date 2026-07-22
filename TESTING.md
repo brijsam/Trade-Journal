@@ -21,7 +21,7 @@ Another: React reverts a controlled input's DOM value back to its (unchanged) `v
 ## Expected result
 
 ```
-Tests  242 passed (242)
+Tests  244 passed (244)
 ```
 
 **A fully green run is the expected state.** No `BUG:`-tagged tests are outstanding — the last one (the CSV fee round trip) went green when the defect was fixed and lost its tag. Any failure is a real regression.
@@ -58,7 +58,7 @@ The `BUG:` convention stays: a test tagged `BUG:` asserts what the code *should*
 
 `src/lib/auth.test.js` covers the login gate's pure logic (jsdom-free, on Node's Web Crypto): `hashPassword` never stores plaintext and is deterministic for a fixed salt but salted per call otherwise, `verifyPassword` admits the right password and rejects the wrong one, `normalizeUsers` drops records missing a username or hash, `findUser` matches case-insensitively, `makeUser` rejects blanks.
 
-The component smoke tests in `App.test.jsx` add the cashflow tab (records a deposit into `settings.transactions`, running balance + account-balance card, filter behind the toggle), the login gate (`AuthGate` rejects a wrong password / unknown username, admits the right one) and the trades table's ServiceNow-style inline edit (the grade cell's pencil commits `{grade}` through `onBulkEdit`, a symbol edit commits upper-cased on Enter, and no pencil renders when `onBulkEdit` is absent). The React shell's remaining wiring, the charts and the Electron layer have no automated tests — verify those by driving the app.
+The component smoke tests in `App.test.jsx` add the cashflow tab (records a deposit into `settings.transactions`, running balance + account-balance card, filter behind the toggle), the login gate (`AuthGate` rejects a wrong password / unknown username, admits the right one), the trades table's ServiceNow-style inline edit (the grade cell's pencil commits `{grade}` through `onBulkEdit`, a symbol edit commits upper-cased on Enter, and no pencil renders when `onBulkEdit` is absent) and `ErrorBoundary` (a throwing child renders the fallback screen and logs via `console.error` rather than crashing; a non-throwing child renders normally). The React shell's remaining wiring, the charts and the Electron layer have no automated tests — verify those by driving the app.
 
 ## The suite is pinned to `TZ=Asia/Kolkata`
 

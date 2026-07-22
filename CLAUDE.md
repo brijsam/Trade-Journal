@@ -23,14 +23,14 @@ npx vitest run -t "aggregateLegs"   # single test or describe block, by name
 
 Verification for any change is `npm run lint` + `npm test`, plus driving the app when the change is visual (`.claude/launch.json` defines the dev server as "Trading Journal Dev" on port 5173).
 
-**`npm test` is expected to be fully green (242 passed).** No `BUG:`-tagged known-failing tests are outstanding — the CSV fee round-trip defect that used to hold the count at 1 failure is fixed. If a future defect lands a new `BUG:` test, [TESTING.md](TESTING.md) and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) carry the expected count; a `BUG:` test must never be made green by rewriting its expectation. Any failure today is a real regression.
+**`npm test` is expected to be fully green (244 passed).** No `BUG:`-tagged known-failing tests are outstanding — the CSV fee round-trip defect that used to hold the count at 1 failure is fixed. If a future defect lands a new `BUG:` test, [TESTING.md](TESTING.md) and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) carry the expected count; a `BUG:` test must never be made green by rewriting its expectation. Any failure today is a real regression.
 
 ## Layout
 
 - `src/lib/trade.js` — **the journal's rules.** Trade maths, aggregate stats, date bucketing, storage sharding, account/settings normalization, CSV import/export, cashflow transactions, form shapes. Pure: no React, no DOM, no storage. This is where behaviour changes belong.
 - `src/lib/trade.test.js` — the feature suite covering the above (plain Node, no DOM).
 - `src/lib/auth.js` — the local login gate's pure logic: PBKDF2-SHA-256 password hashing on Web Crypto (`globalThis.crypto.subtle`, present in the browser, the Electron renderer and Node's test runtime), user-record normalization and lookup. No React, no DOM, no storage. Covered by `src/lib/auth.test.js`.
-- `src/App.test.jsx` — component smoke tests for the trade form's validation gate, the trades table, the journal panel, the strategy playbook, the cashflow tab and the login gate (jsdom via per-file pragma; the lib suite stays DOM-free). `TradeForm`, `TradesTable`, `JournalPanel`, `PlaybookPanel`, `CashflowPanel`, `HelpPanel`, `AuthGate` and `SettingsPanel` are exported from App.jsx for these tests only.
+- `src/App.test.jsx` — component smoke tests for the trade form's validation gate, the trades table, the journal panel, the strategy playbook, the cashflow tab, the login gate and the render-level `ErrorBoundary` (jsdom via per-file pragma; the lib suite stays DOM-free). `TradeForm`, `TradesTable`, `JournalPanel`, `PlaybookPanel`, `CashflowPanel`, `HelpPanel`, `AuthGate`, `SettingsPanel` and `ErrorBoundary` are exported from App.jsx for these tests only.
 - `src/lib/format.js` — pure display formatting shared by both bundles.
 - `src/lib/storage.js` — the storage backend switch.
 - `src/App.jsx` (~5.2k lines) — the React shell: design tokens, CSS, every panel and modal, and the root `App` component. Sections are marked with `/* ==== NAME ==== */` banners; grep those to navigate. List-scale code paths (e.g. the trades table sort) derive per-row keys once and keep comparators free of per-comparison parsing — hold that line when touching them.
@@ -65,6 +65,10 @@ Three invariants in the root `App`:
 `computeTrade(t)` derives everything (RR, P&L, duration, fill aggregates) and caches against the source object in a `WeakMap`. This is only sound because trade objects are always **replaced, never mutated** — keep it that way.
 
 `stripComputed(trade)` must be applied before anything is written (save, backup export, restore). The form edits a *computed* trade; without this, derived fields get stored as stale copies. `COMPUTED_TRADE_KEYS` is the list.
+
+### Error handling
+
+`ErrorBoundary` (App.jsx, the one class component this codebase needs) wraps the root `App` render and catches render-time throws anywhere below it, showing a themed fallback screen (Reload button, error message, reuses `BOOT_CSS`/`boot-error` styling) instead of a blank page. It logs via `console.error` — no external error reporting, the app is offline-only. This is a render-layer catch only: it does not touch storage, disable persistence, or run when a *storage read* fails (that's `loadError`, a separate boot-time state inside `App` itself — see Sharded trade persistence above).
 
 ### Data model (v3) — legacy fallbacks are load-bearing
 

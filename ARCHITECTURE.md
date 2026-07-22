@@ -87,6 +87,8 @@ So no single key nears the browser's ~5MB per-key ceiling as the journal grows.
 
 A single-instance lock in `main.cjs` backs this up: two copies of the app would be two independent writers racing over the same shard files, and atomic rename protects a single write, not two processes.
 
+`loadError` only catches a failed **storage read**. A throw during **render** — anywhere in the component tree, at any point after boot — is a different failure mode with no `loadError` state to catch it, and previously white-screened the app. `ErrorBoundary` (App.jsx, wraps the root `App` render) catches that case: `getDerivedStateFromError` + `componentDidCatch` show a themed fallback screen with a Reload button and log via `console.error`, without touching storage or the save effects — a render bug and a data-loss bug stay distinct failure paths.
+
 ## Trade computation
 
 `computeTrade(t)` derives everything — RR, P&L, duration, fee totals, fill aggregates — and caches against the source object in a `WeakMap`:

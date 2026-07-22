@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { TradeForm, TradesTable, JournalPanel, PlaybookPanel, CashflowPanel, AuthGate } from "./App";
+import { TradeForm, TradesTable, JournalPanel, PlaybookPanel, CashflowPanel, AuthGate, ErrorBoundary } from "./App";
 import { computeTrade, DEFAULT_PREFERENCES, DEFAULT_SETTINGS, fmtDate, parseLocalInputValue } from "./lib/trade";
 import { makeUser } from "./lib/auth";
 
@@ -531,5 +531,37 @@ describe("AuthGate — login", () => {
     await user.click(screen.getByRole("button", { name: /sign in/i }));
     expect(await screen.findByText(/no account with that username/i)).toBeTruthy();
     expect(onAuthenticated).not.toHaveBeenCalled();
+  });
+});
+
+// A render throw anywhere below the boundary must show the fallback screen
+// instead of an uncaught error taking the whole tree down (the white-screen
+// case the boundary exists to prevent), and must not swallow the error.
+describe("ErrorBoundary — render-throw fallback", () => {
+  const Bomb = () => {
+    throw new Error("boom");
+  };
+
+  it("renders the fallback screen and logs the error instead of crashing", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(
+      <ErrorBoundary>
+        <Bomb />
+      </ErrorBoundary>
+    );
+    expect(screen.getByText(/something went wrong/i)).toBeTruthy();
+    expect(screen.getByText(/boom/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /reload/i })).toBeTruthy();
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it("renders children normally when nothing throws", () => {
+    render(
+      <ErrorBoundary>
+        <div>all good</div>
+      </ErrorBoundary>
+    );
+    expect(screen.getByText("all good")).toBeTruthy();
   });
 });
