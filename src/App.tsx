@@ -204,6 +204,16 @@ const TOKENS_MATERIAL_DARK = {
   "--loss": "#F28B82", "--loss-soft": "rgba(242,139,130,0.11)", "--loss-border": "rgba(242,139,130,0.33)",
   "--card-shadow": "0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 22px rgba(0,0,0,0.30)",
 };
+const TOKENS_NOCTURNE = {
+  "--bg-950": "#12141F", "--bg-900": "#161826", "--bg-800": "#1D1F2E", "--bg-700": "#232532",
+  "--bg-elevated": "#232532", "--border": "#333546", "--border-soft": "#2A2C3B",
+  "--text-primary": "#E9E9ED", "--text-secondary": "#B4B3C4", "--text-muted": "#7A7A93",
+  "--accent": "#9184D9", "--accent-soft": "rgba(145,132,217,0.14)",
+  "--accent-2": "#A7A1DB", "--accent-2-soft": "rgba(167,161,219,0.12)",
+  "--profit": "#7EC49B", "--profit-soft": "rgba(126,196,155,0.10)", "--profit-border": "rgba(126,196,155,0.32)",
+  "--loss": "#D98282", "--loss-soft": "rgba(217,130,130,0.10)", "--loss-border": "rgba(217,130,130,0.32)",
+  "--card-shadow": "0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 22px rgba(0,0,0,0.30)",
+};
 const THEMES = {
   dark: { label: "Dark", icon: Moon, tokens: TOKENS_DARK },
   light: { label: "Light", icon: Sun, tokens: TOKENS_LIGHT },
@@ -217,6 +227,7 @@ const THEMES = {
   nord: { label: "Nord Dark", icon: Snowflake, tokens: TOKENS_NORD },
   dracula: { label: "Dracula", icon: Moon, tokens: TOKENS_DRACULA },
   material: { label: "Material Dark", icon: Moon, tokens: TOKENS_MATERIAL_DARK },
+  nocturne: { label: "Nocturne", icon: Moon, tokens: TOKENS_NOCTURNE },
 };
 // Font faces are bundled locally and imported in main.jsx (see @fontsource
 // imports there). No remote @import — the packaged app must render its type
