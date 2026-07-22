@@ -77,7 +77,7 @@ something to default silently.
 
 ---
 
-## ⬜ Batch #3 — Root-App integration test
+## ✅ Batch #3 — Root-App integration test (2026-07-22)
 
 **Why:** the save/load/shard/boot loop (24-shard trade storage, separate
 meta vs. trade save effects, `loadError` fail-safe, `writtenShardsRef`

@@ -9,10 +9,11 @@ npx vitest run src/lib/trade.test.js
 
 Runner is [vitest](https://vitest.dev). No config file — vitest reads `vite.config.js`, so `__APP_VERSION__` and the React plugin apply automatically.
 
-Two suites, two environments:
+Three suites, two environments:
 
 - `src/lib/trade.test.js` — the rules. Everything under test is pure, so it runs in plain Node: no DOM, no jsdom.
 - `src/App.test.jsx` — component smoke tests (`@testing-library/react` + `user-event`) for the trade form's validation gate, the trades table, the daily journal panel (including its filter) and the strategy playbook tab. jsdom is opted into **per file** via the `// @vitest-environment jsdom` pragma at its top, so the lib suite stays in Node. Deliberately shallow: they assert the components wire the rules to the user (errors surface, saves fire, destructive paths confirm first), not the maths — that lives in the lib suite. `TradeForm`, `TradesTable`, `JournalPanel`, `PlaybookPanel` and `SettingsPanel` are exported from App.jsx for these tests only.
+- `src/App.integration.test.jsx` — the one suite that renders the real default-exported `App`, not an isolated panel. `./lib/storage` is `vi.mock`ed with an in-memory `get/set/delete/list`; `./Charts` is stubbed too, so lazy-loaded Recharts components never actually mount in jsdom. Covers the wiring `App.test.jsx` structurally can't: boot reading meta + shards into the rendered UI, `writtenShardsRef` shard-diffing, the meta/trade save effects staying separate, and `loadError` disabling persistence. See "What is covered" below.
 
 One trap found writing the component tests: the `DateTimePicker` renders inside a `Field` `<label>`, and buttons are labelable elements — so every button in its popover inherits "Entry Date & Time" as its accessible name. Those tests query the picker by text, not by role+name.
 
@@ -21,7 +22,7 @@ Another: React reverts a controlled input's DOM value back to its (unchanged) `v
 ## Expected result
 
 ```
-Tests  244 passed (244)
+Tests  248 passed (248)
 ```
 
 **A fully green run is the expected state.** No `BUG:`-tagged tests are outstanding — the last one (the CSV fee round trip) went green when the defect was fixed and lost its tag. Any failure is a real regression.
@@ -58,7 +59,9 @@ The `BUG:` convention stays: a test tagged `BUG:` asserts what the code *should*
 
 `src/lib/auth.test.js` covers the login gate's pure logic (jsdom-free, on Node's Web Crypto): `hashPassword` never stores plaintext and is deterministic for a fixed salt but salted per call otherwise, `verifyPassword` admits the right password and rejects the wrong one, `normalizeUsers` drops records missing a username or hash, `findUser` matches case-insensitively, `makeUser` rejects blanks.
 
-The component smoke tests in `App.test.jsx` add the cashflow tab (records a deposit into `settings.transactions`, running balance + account-balance card, filter behind the toggle), the login gate (`AuthGate` rejects a wrong password / unknown username, admits the right one), the trades table's ServiceNow-style inline edit (the grade cell's pencil commits `{grade}` through `onBulkEdit`, a symbol edit commits upper-cased on Enter, and no pencil renders when `onBulkEdit` is absent) and `ErrorBoundary` (a throwing child renders the fallback screen and logs via `console.error` rather than crashing; a non-throwing child renders normally). The React shell's remaining wiring, the charts and the Electron layer have no automated tests — verify those by driving the app.
+The component smoke tests in `App.test.jsx` add the cashflow tab (records a deposit into `settings.transactions`, running balance + account-balance card, filter behind the toggle), the login gate (`AuthGate` rejects a wrong password / unknown username, admits the right one), the trades table's ServiceNow-style inline edit (the grade cell's pencil commits `{grade}` through `onBulkEdit`, a symbol edit commits upper-cased on Enter, and no pencil renders when `onBulkEdit` is absent) and `ErrorBoundary` (a throwing child renders the fallback screen and logs via `console.error` rather than crashing; a non-throwing child renders normally).
+
+`App.integration.test.jsx` covers the persistence wiring around the root `App` itself, against a mocked `./lib/storage`: a trade seeded into its shard (plus a meta-seeded strategy) renders on the Trades and Playbook tabs after boot; editing one trade's grade through the inline pencil writes exactly one shard key (`writtenShardsRef` diffing) and no meta write; switching tabs (a `preferences` change) writes meta but no trade shard, pinning that the two save effects are genuinely separate; and a `storage.list` rejection during boot shows the `loadError` fallback screen and leaves every write disabled — the shard already on disk is provably untouched afterwards. The charts and the Electron layer still have no automated tests — verify those by driving the app.
 
 ## The suite is pinned to `TZ=Asia/Kolkata`
 

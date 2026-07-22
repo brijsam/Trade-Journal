@@ -23,7 +23,7 @@ npx vitest run -t "aggregateLegs"   # single test or describe block, by name
 
 Verification for any change is `npm run lint` + `npm test`, plus driving the app when the change is visual (`.claude/launch.json` defines the dev server as "Trading Journal Dev" on port 5173).
 
-**`npm test` is expected to be fully green (244 passed).** No `BUG:`-tagged known-failing tests are outstanding — the CSV fee round-trip defect that used to hold the count at 1 failure is fixed. If a future defect lands a new `BUG:` test, [TESTING.md](TESTING.md) and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) carry the expected count; a `BUG:` test must never be made green by rewriting its expectation. Any failure today is a real regression.
+**`npm test` is expected to be fully green (248 passed).** No `BUG:`-tagged known-failing tests are outstanding — the CSV fee round-trip defect that used to hold the count at 1 failure is fixed. If a future defect lands a new `BUG:` test, [TESTING.md](TESTING.md) and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) carry the expected count; a `BUG:` test must never be made green by rewriting its expectation. Any failure today is a real regression.
 
 ## Layout
 
@@ -31,6 +31,7 @@ Verification for any change is `npm run lint` + `npm test`, plus driving the app
 - `src/lib/trade.test.js` — the feature suite covering the above (plain Node, no DOM).
 - `src/lib/auth.js` — the local login gate's pure logic: PBKDF2-SHA-256 password hashing on Web Crypto (`globalThis.crypto.subtle`, present in the browser, the Electron renderer and Node's test runtime), user-record normalization and lookup. No React, no DOM, no storage. Covered by `src/lib/auth.test.js`.
 - `src/App.test.jsx` — component smoke tests for the trade form's validation gate, the trades table, the journal panel, the strategy playbook, the cashflow tab, the login gate and the render-level `ErrorBoundary` (jsdom via per-file pragma; the lib suite stays DOM-free). `TradeForm`, `TradesTable`, `JournalPanel`, `PlaybookPanel`, `CashflowPanel`, `HelpPanel`, `AuthGate`, `SettingsPanel` and `ErrorBoundary` are exported from App.jsx for these tests only.
+- `src/App.integration.test.jsx` — drives the real default-exported `App` against an in-memory mock of `./lib/storage` (`./Charts` is stubbed too, so Recharts never loads in jsdom). Covers the boot-to-render loop and the save wiring that `App.test.jsx`'s isolated panels can't reach: meta+shard reads landing in the UI, `writtenShardsRef` shard-diffing (one edit writes one shard key, not all 24), the meta/trade save effects staying genuinely separate, and `loadError` disabling persistence so a failed read never overwrites shards already on disk.
 - `src/lib/format.js` — pure display formatting shared by both bundles.
 - `src/lib/storage.js` — the storage backend switch.
 - `src/App.jsx` (~5.2k lines) — the React shell: design tokens, CSS, every panel and modal, and the root `App` component. Sections are marked with `/* ==== NAME ==== */` banners; grep those to navigate. List-scale code paths (e.g. the trades table sort) derive per-row keys once and keep comparators free of per-comparison parsing — hold that line when touching them.
