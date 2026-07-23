@@ -12,8 +12,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { TradeForm, TradesTable, JournalPanel, PlaybookPanel, CashflowPanel, AuthGate, ErrorBoundary } from "./App";
-import { computeTrade, DEFAULT_PREFERENCES, DEFAULT_SETTINGS, fmtDate, parseLocalInputValue } from "./lib/trade";
+import { TradeForm, TradesTable, FiltersBar, JournalPanel, PlaybookPanel, CashflowPanel, TimezonePicker, AuthGate, ProfilePanel, ErrorBoundary } from "./App";
+import { computeTrade, DEFAULT_FILTERS, DEFAULT_PREFERENCES, DEFAULT_SETTINGS, fmtDate, parseLocalInputValue, toLocalInputValue, timezoneOptions } from "./lib/trade";
 import { makeUser } from "./lib/auth";
 
 afterEach(cleanup);
@@ -198,6 +198,90 @@ describe("TradesTable — smoke", () => {
   it("offers no inline editing when onBulkEdit is not wired", () => {
     render(<TradesTable {...tableProps([closedTrade("TJ-00001", "BTCUSDT", "110")])} />);
     expect(screen.queryByRole("button", { name: /edit symbol for/i })).toBeNull();
+  });
+
+  /* The totals row is what a filter is *for*: the table is handed the filtered
+     trades, so this has to total exactly what is on screen — including across
+     pages, and with the money under its own column whatever is hidden. */
+  it("totals the whole filtered set, not just the visible page", () => {
+    const trades = [
+      closedTrade("TJ-00001", "BTCUSDT", "110"), // +10
+      closedTrade("TJ-00002", "EURUSD", "90"),   // -10
+      closedTrade("TJ-00003", "XAUUSD", "130"),  // +30
+    ];
+    const { container } = render(<TradesTable {...tableProps(trades, { initialPageSize: 2 })} />);
+    const foot = container.querySelector(".trades-total");
+
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(2); // one page
+    expect(foot.textContent).toContain("3 trades shown");
+    expect(foot.textContent).toContain("66.7% win rate");
+    expect(foot.textContent).toContain("+$30.00");                  // 10 - 10 + 30
+  });
+
+  it("counts open trades separately and leaves them out of the P&L", () => {
+    const open = computeTrade({
+      id: "TJ-00009", symbol: "NAS100", direction: "Long", status: "Open", marketType: "Crypto", grade: "B",
+      entryPrice: "100", positionSize: "1", entryDateTime: "2026-07-10T09:00",
+    });
+    const { container } = render(<TradesTable {...tableProps([closedTrade("TJ-00001", "BTCUSDT", "110"), open])} />);
+    const foot = container.querySelector(".trades-total").textContent;
+    expect(foot).toContain("2 trades shown");
+    expect(foot).toContain("1 closed");
+    expect(foot).toContain("1 open");
+    expect(foot).toContain("+$10.00");
+  });
+
+  it("keeps the totals under their own columns when a column is hidden", () => {
+    const { container } = render(<TradesTable {...tableProps([closedTrade("TJ-00001", "BTCUSDT", "110")], { hiddenColumns: ["pnlPercent", "expectedRR"] })} />);
+    const headCells = [...container.querySelectorAll("thead th")].length;
+    const footRow = container.querySelector(".trades-total tr");
+    const spanned = [...footRow.cells].reduce((n, c) => n + (c.colSpan || 1), 0);
+    expect(spanned).toBe(headCells);
+  });
+
+  it("shows how long an open trade has been open", () => {
+    const open = computeTrade({
+      id: "TJ-00009", symbol: "NAS100", direction: "Long", status: "Open", marketType: "Crypto", grade: "B",
+      entryPrice: "100", positionSize: "1",
+      entryDateTime: toLocalInputValue(new Date(Date.now() - 3 * 24 * 60 * 60 * 1000 - 2 * 60 * 60 * 1000)),
+    });
+    const { container } = render(<TradesTable {...tableProps([open])} />);
+    expect(container.querySelector(".cell-age").textContent).toBe("3d 2h");
+  });
+});
+
+// The filters bar's chips: a collapsed panel that only says "Filters (3)" is
+// why a short list reads as missing trades. describeFilters is proven in
+// lib/trade.test.js; this asserts the bar renders one chip per filter and that
+// removing one clears only that filter.
+describe("FiltersBar — active filter chips", () => {
+  const barProps = (filters, overrides = {}) => ({
+    filters: { ...DEFAULT_FILTERS, ...filters },
+    setFilters: vi.fn(),
+    assets: ["BTCUSDT"], strategies: ["ICT"], tags: ["london"],
+    ...overrides,
+  });
+
+  it("names every active filter", () => {
+    render(<FiltersBar {...barProps({ status: "Open", asset: "BTCUSDT", result: "win" })} />);
+    expect(screen.getByText("Open trades")).toBeTruthy();
+    expect(screen.getByText("BTCUSDT")).toBeTruthy();
+    expect(screen.getByText("Wins only")).toBeTruthy();
+  });
+
+  it("shows no chips when nothing is filtered", () => {
+    const { container } = render(<FiltersBar {...barProps({})} />);
+    expect(container.querySelector(".filter-chips")).toBeNull();
+  });
+
+  it("removing a chip clears that filter and leaves the others alone", async () => {
+    const user = userEvent.setup();
+    let patched;
+    const setFilters = vi.fn((updater) => { patched = updater({ ...DEFAULT_FILTERS, asset: "BTCUSDT", strategy: "ICT" }); });
+    render(<FiltersBar {...barProps({ asset: "BTCUSDT", strategy: "ICT" }, { setFilters })} />);
+
+    await user.click(screen.getByRole("button", { name: /remove filter: BTCUSDT/i }));
+    expect(patched).toMatchObject({ asset: "", strategy: "ICT" });
   });
 });
 
@@ -414,9 +498,11 @@ describe("PlaybookPanel — Strategy Playbook", () => {
       entryDateTime: "2026-07-10T09:00", exitDateTime: "2026-07-10T11:00", strategy,
     });
     const { container } = render(<PlaybookPanel {...playbookProps({ trades: [trade("TJ-1", "ICT"), trade("TJ-2", "ICT"), trade("TJ-3", "Scalping")] })} />);
-    const hints = [...container.querySelectorAll(".playbook-count")].map((h) => h.textContent);
-    expect(hints[0]).toContain("2 trades logged");
-    expect(hints[1]).toContain("1 trade logged");
+    const stats = [...container.querySelectorAll(".playbook-stats")].map((h) => h.textContent);
+    expect(stats[0]).toContain("2 trades");
+    expect(stats[1]).toContain("1 trade");
+    // …and the note carries how recent the record behind it is.
+    expect(container.querySelector(".playbook-count").textContent).toContain("Last closed");
   });
 
   it("prompts to add a strategy first when the list is empty", () => {
@@ -424,11 +510,117 @@ describe("PlaybookPanel — Strategy Playbook", () => {
     expect(screen.getByText(/no strategies yet — add one with manage/i)).toBeTruthy();
   });
 
+  // The stats row is the reason the tab exists: a plan read next to its result.
+  const graded = (id, strategy, exitPrice) => computeTrade({
+    id, symbol: "BTCUSDT", direction: "Long", status: "Closed", marketType: "Crypto", grade: "B",
+    entryPrice: "100", exitPrice, positionSize: "1", stopLoss: "90",
+    entryDateTime: "2026-07-10T09:00", exitDateTime: "2026-07-10T11:00", strategy,
+  });
+
+  it("shows each strategy's win rate and net P&L beside its note", () => {
+    const { container } = render(<PlaybookPanel {...playbookProps({
+      trades: [graded("TJ-1", "ICT", "110"), graded("TJ-2", "ICT", "95")],
+    })} />);
+    const stats = [...container.querySelectorAll(".playbook-card")][0].textContent;
+    expect(stats).toContain("Win rate");
+    expect(stats).toContain("50.0%");
+    expect(stats).toContain("+$5.00");
+  });
+
+  it("searches strategy names and note text", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<PlaybookPanel {...playbookProps({
+      settings: { ...DEFAULT_SETTINGS, strategyNotes: { Scalping: "Liquidity sweep only." } },
+    })} />);
+    const names = () => [...container.querySelectorAll(".playbook-name")].map((n) => n.textContent);
+
+    await user.type(screen.getByLabelText(/search strategies/i), "liquidity");
+    expect(names()).toEqual(["Scalping"]);
+
+    await user.clear(screen.getByLabelText(/search strategies/i));
+    await user.type(screen.getByLabelText(/search strategies/i), "ict");
+    expect(names()).toEqual(["ICT"]);
+  });
+
+  it("reorders by result when a sort is picked, without dropping untraded strategies", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<PlaybookPanel {...playbookProps({ trades: [graded("TJ-1", "Scalping", "130")] })} />);
+    const names = () => [...container.querySelectorAll(".playbook-name")].map((n) => n.textContent);
+
+    expect(names()).toEqual(["ICT", "Scalping"]);
+    await user.click(screen.getByRole("button", { name: /best p&l/i }));
+    // Scalping has the only P&L; ICT has none at all and sorts last rather than
+    // ranking as a zero.
+    expect(names()).toEqual(["Scalping", "ICT"]);
+  });
+
   it("opens the strategy manager from the panel's Manage button", async () => {
     const user = userEvent.setup();
     render(<PlaybookPanel {...playbookProps()} />);
     await user.click(screen.getByRole("button", { name: /manage/i }));
     expect(await screen.findByText(/manage strategies/i)).toBeTruthy();
+  });
+});
+
+// The journal-timezone combobox. Ordering, grouping and matching are proven in
+// lib/trade.test.js (timezoneOptions / filterTimezoneOptions / groupTimezoneOptions);
+// these assert the widget around them — search narrows, keyboard selects, and the
+// System row reports "" rather than the machine's zone id.
+describe("TimezonePicker — searchable journal timezone", () => {
+  const options = timezoneOptions(
+    ["Asia/Kolkata", "America/New_York", "Europe/Paris", "Asia/Tokyo", "Asia/Kathmandu"],
+    new Date("2026-07-15T12:00:00Z"),
+  );
+  const pickerProps = (overrides = {}) => ({ value: "", onChange: vi.fn(), options, systemTz: "Asia/Kolkata", ...overrides });
+
+  const open = async (user) => user.click(screen.getByRole("button", { name: /journal timezone/i }));
+
+  it("lists every zone under an ascending ladder of GMT headings", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<TimezonePicker {...pickerProps()} />);
+    await open(user);
+    expect([...container.querySelectorAll(".tz-group")].map((g) => g.textContent))
+      .toEqual(["-04:00 GMT", "+02:00 GMT", "+05:30 GMT", "+05:45 GMT", "+09:00 GMT"]);
+  });
+
+  it("narrows to a city as it is typed", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<TimezonePicker {...pickerProps()} />);
+    await open(user);
+    await user.type(screen.getByLabelText(/search timezones/i), "tokyo");
+    expect([...container.querySelectorAll(".tz-opt-city")].map((o) => o.textContent)).toEqual(["Tokyo"]);
+  });
+
+  it("narrows on a GMT offset written without its leading zero", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<TimezonePicker {...pickerProps()} />);
+    await open(user);
+    await user.type(screen.getByLabelText(/search timezones/i), "+5:45");
+    expect([...container.querySelectorAll(".tz-opt-city")].map((o) => o.textContent)).toEqual(["Kathmandu"]);
+  });
+
+  it("reports the picked zone id", async () => {
+    const user = userEvent.setup();
+    const props = pickerProps();
+    render(<TimezonePicker {...props} />);
+    await open(user);
+    await user.click(screen.getByText("New York"));
+    expect(props.onChange).toHaveBeenCalledWith("America/New_York");
+  });
+
+  it("selects with the keyboard, and reports System as \"\" not the machine's id", async () => {
+    const user = userEvent.setup();
+    const props = pickerProps({ value: "Asia/Tokyo" });
+    render(<TimezonePicker {...props} />);
+    await open(user);
+    // The cursor opens on the selected zone; Home walks it back to the System row.
+    await user.keyboard("{Home}{Enter}");
+    expect(props.onChange).toHaveBeenCalledWith("");
+  });
+
+  it("keeps a zone this runtime does not list selectable rather than reading as System", async () => {
+    render(<TimezonePicker {...pickerProps({ value: "Mars/Olympus" })} />);
+    expect(screen.getByRole("button", { name: /journal timezone: mars\/olympus/i })).toBeTruthy();
   });
 });
 
@@ -517,7 +709,10 @@ describe("AuthGate — login", () => {
     await user.clear(screen.getByPlaceholderText(/your password/i));
     await user.type(screen.getByPlaceholderText(/your password/i), "hunter2");
     await user.click(screen.getByRole("button", { name: /sign in/i }));
-    await vi.waitFor(() => expect(onAuthenticated).toHaveBeenCalledWith(record));
+    // The record comes back stamped with this sign-in — the profile reads it as
+    // "last sign-in", so the gate is where it has to be set.
+    await vi.waitFor(() => expect(onAuthenticated).toHaveBeenCalledWith({ ...record, lastLoginAt: expect.any(String) }));
+    expect(onAuthenticated.mock.calls[0][0].lastLoginAt).not.toBe("");
   });
 
   it("rejects an unknown username", async () => {
@@ -531,6 +726,170 @@ describe("AuthGate — login", () => {
     await user.click(screen.getByRole("button", { name: /sign in/i }));
     expect(await screen.findByText(/no account with that username/i)).toBeTruthy();
     expect(onAuthenticated).not.toHaveBeenCalled();
+  });
+});
+
+/* Sign-up at the gate. The rule being pinned is the one that keeps the gate
+   worth having: with self-signup off, the tab is honest about *why* it can't
+   create an account instead of quietly doing it anyway. */
+describe("AuthGate — sign up", () => {
+  const gate = (props = {}) => ({ users: [], journalName: "Trade Journal", onAuthenticated: vi.fn(), onRegister: vi.fn(), ...props });
+  const openSignup = async (user) => user.click(screen.getByRole("tab", { name: /create account/i }));
+
+  it("registers a first account even with self-signup off — that is how the gate gets turned on", async () => {
+    const user = userEvent.setup();
+    const props = gate();
+    render(<AuthGate {...props} />);
+
+    await openSignup(user);
+    await user.type(screen.getByPlaceholderText(/pick a username/i), "brij");
+    await user.type(screen.getByPlaceholderText(/shown on your profile/i), "Brij K");
+    await user.type(screen.getByPlaceholderText(/at least 4 characters/i), "hunter2");
+    await user.type(screen.getByPlaceholderText(/repeat password/i), "hunter2");
+    await user.click(screen.getByRole("button", { name: /create account & sign in/i }));
+
+    await vi.waitFor(() => expect(props.onRegister).toHaveBeenCalled());
+    const created = props.onRegister.mock.calls[0][0];
+    expect(created).toMatchObject({ username: "brij", displayName: "Brij K" });
+    expect(created.hash).toBeTruthy();
+    expect(created.hash).not.toContain("hunter2");
+  });
+
+  it("refuses to self-register past a gate that is already on", async () => {
+    const user = userEvent.setup();
+    const props = gate({ users: [await makeUser("brij", "hunter2")] });
+    render(<AuthGate {...props} />);
+
+    await openSignup(user);
+    expect(screen.getByText(/self sign-up is switched off/i)).toBeTruthy();
+    expect(screen.queryByPlaceholderText(/pick a username/i)).toBeNull();
+    expect(props.onRegister).not.toHaveBeenCalled();
+  });
+
+  it("lets a second person register once the owner allows it", async () => {
+    const user = userEvent.setup();
+    const props = gate({ users: [await makeUser("brij", "hunter2")], allowSignup: true });
+    render(<AuthGate {...props} />);
+
+    await openSignup(user);
+    await user.type(screen.getByPlaceholderText(/pick a username/i), "sam");
+    await user.type(screen.getByPlaceholderText(/at least 4 characters/i), "sam-pass");
+    await user.type(screen.getByPlaceholderText(/repeat password/i), "sam-pass");
+    await user.click(screen.getByRole("button", { name: /create account & sign in/i }));
+
+    await vi.waitFor(() => expect(props.onRegister).toHaveBeenCalled());
+    expect(props.onRegister.mock.calls[0][0].username).toBe("sam");
+  });
+
+  it("rejects a taken username and a mismatched confirmation, without registering", async () => {
+    const user = userEvent.setup();
+    const props = gate({ users: [await makeUser("brij", "hunter2")], allowSignup: true });
+    render(<AuthGate {...props} />);
+
+    await openSignup(user);
+    await user.type(screen.getByPlaceholderText(/pick a username/i), "BRIJ");
+    await user.type(screen.getByPlaceholderText(/at least 4 characters/i), "whatever");
+    await user.type(screen.getByPlaceholderText(/repeat password/i), "whatever");
+    await user.click(screen.getByRole("button", { name: /create account & sign in/i }));
+    expect(await screen.findByText(/username is taken/i)).toBeTruthy();
+
+    await user.clear(screen.getByPlaceholderText(/pick a username/i));
+    await user.type(screen.getByPlaceholderText(/pick a username/i), "sam");
+    await user.clear(screen.getByPlaceholderText(/repeat password/i));
+    await user.type(screen.getByPlaceholderText(/repeat password/i), "different");
+    await user.click(screen.getByRole("button", { name: /create account & sign in/i }));
+    expect(await screen.findByText(/don't match/i)).toBeTruthy();
+    expect(props.onRegister).not.toHaveBeenCalled();
+  });
+});
+
+// The signed-in user's own page: what it shows, and the two things it can
+// change. The password rules themselves are proven in lib/auth.test.js.
+describe("ProfilePanel — the signed-in user", () => {
+  const profileProps = async (overrides = {}) => ({
+    user: { ...(await makeUser("brij", "hunter2")), displayName: "Brij K", createdAt: "2026-01-15T10:00" },
+    users: [], onUpdateUser: vi.fn(), onSignOut: vi.fn(), onToast: vi.fn(), tradeCount: 42, journalName: "Trade Journal",
+    ...overrides,
+  });
+
+  it("shows who is signed in, by display name over username", async () => {
+    render(<ProfilePanel {...await profileProps()} />);
+    expect(screen.getByRole("heading", { name: "Brij K" })).toBeTruthy();
+    expect(screen.getByText("@brij")).toBeTruthy();
+    expect(screen.getByText(/42 trades in Trade Journal/)).toBeTruthy();
+  });
+
+  it("falls back to the username when no display name is set", async () => {
+    const props = await profileProps();
+    render(<ProfilePanel {...props} user={{ ...props.user, displayName: "" }} />);
+    expect(screen.getByRole("heading", { name: "brij" })).toBeTruthy();
+  });
+
+  it("saves a new display name and leaves the username alone", async () => {
+    const user = userEvent.setup();
+    const props = await profileProps();
+    render(<ProfilePanel {...props} />);
+
+    const name = screen.getByLabelText(/display name/i);
+    await user.clear(name);
+    await user.type(name, "Brij Trades");
+    await user.click(screen.getByRole("button", { name: /save profile/i }));
+
+    expect(props.onUpdateUser).toHaveBeenCalledWith(expect.objectContaining({ displayName: "Brij Trades", username: "brij" }));
+    // The username is the identity every record is keyed to — not editable here.
+    expect(screen.getByLabelText(/^username$/i).readOnly).toBe(true);
+  });
+
+  it("changes the password only when the current one is right", async () => {
+    const user = userEvent.setup();
+    const props = await profileProps();
+    render(<ProfilePanel {...props} />);
+
+    await user.type(screen.getByPlaceholderText(/your current password/i), "wrong");
+    await user.type(screen.getByPlaceholderText(/at least 4 characters/i), "new-secret");
+    await user.type(screen.getByPlaceholderText(/repeat new password/i), "new-secret");
+    await user.click(screen.getByRole("button", { name: /change password/i }));
+    expect(await screen.findByText(/current password is incorrect/i)).toBeTruthy();
+    expect(props.onUpdateUser).not.toHaveBeenCalled();
+
+    await user.clear(screen.getByPlaceholderText(/your current password/i));
+    await user.type(screen.getByPlaceholderText(/your current password/i), "hunter2");
+    await user.click(screen.getByRole("button", { name: /change password/i }));
+    await vi.waitFor(() => expect(props.onUpdateUser).toHaveBeenCalled());
+    const saved = props.onUpdateUser.mock.calls[0][0];
+    expect(saved.hash).not.toBe(props.user.hash);
+    expect(saved.salt).not.toBe(props.user.salt);
+  });
+
+  it("catches a mistyped confirmation before touching the store", async () => {
+    const user = userEvent.setup();
+    const props = await profileProps();
+    render(<ProfilePanel {...props} />);
+
+    await user.type(screen.getByPlaceholderText(/your current password/i), "hunter2");
+    await user.type(screen.getByPlaceholderText(/at least 4 characters/i), "new-secret");
+    await user.type(screen.getByPlaceholderText(/repeat new password/i), "typo");
+    await user.click(screen.getByRole("button", { name: /change password/i }));
+    expect(await screen.findByText(/don't match/i)).toBeTruthy();
+    expect(props.onUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it("signs out on request", async () => {
+    const user = userEvent.setup();
+    const props = await profileProps();
+    render(<ProfilePanel {...props} />);
+    await user.click(screen.getByRole("button", { name: /sign out/i }));
+    expect(props.onSignOut).toHaveBeenCalled();
+  });
+
+  it("lists the other logins only when there are any", async () => {
+    const props = await profileProps();
+    const { rerender } = render(<ProfilePanel {...props} />);
+    expect(screen.queryByText(/who else can sign in/i)).toBeNull();
+
+    rerender(<ProfilePanel {...props} users={[props.user, { ...props.user, id: "u2", username: "sam", displayName: "" }]} />);
+    expect(screen.getByText(/who else can sign in/i)).toBeTruthy();
+    expect(screen.getByText("@sam")).toBeTruthy();
   });
 });
 

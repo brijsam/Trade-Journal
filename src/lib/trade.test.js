@@ -17,15 +17,16 @@
 import { describe, it, expect } from "vitest";
 import {
   computeTrade, aggregateLegs, stripComputed, COMPUTED_TRADE_KEYS,
-  summarize, equityCurve, maxDrawdown, consecutiveStreaks, sharpeSortino,
+  summarize, strategyPerformance, dayBreakdown, equityCurve, maxDrawdown, consecutiveStreaks, sharpeSortino,
   groupPerformance, goalProgress,
   normalizeAccounts, mergeSettings, mergePreferences, clampZoom, stepZoom, paletteFilter, normalizeAccent,
-  DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_BALANCE, DEFAULT_SETTINGS, DEFAULT_PREFERENCES,
+  DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_BALANCE, DEFAULT_SETTINGS, DEFAULT_PREFERENCES, DEFAULT_FILTERS, describeFilters,
   shardOf, shardKey, djb2, SHARD_COUNT, nextTradeId, tradeSeq,
   parseCSV, csvCell, tradesToCSV, rowsToTrades, normalizeCsvDate, partitionDuplicateImports, escapeHtml,
   isoDate, isoWeekKey, monthKey, weekOfMonthKey, durationLabel,
   dateInRange, dateRangeForPreset, startOfWeek, toLocalInputValue,
   zonedNow, isValidTimeZone, normalizeTimezone, tzOffsetLabel, tzOffsetMinutes,
+  offsetLabelPadded, timezoneOptions, filterTimezoneOptions, groupTimezoneOptions,
   journalEntries, journalToMarkdown, journalToCSV, journalToHtml, filterJournalEntries,
   normalizeChartCount, CHART_PERIOD_CHOICES, mostRecentTrades,
   normalizeTransactions, transactionsNet, filterTransactions, sortedTransactions, TRANSACTION_TYPES,
@@ -272,6 +273,158 @@ describe("summarize", () => {
   it("averages only the RRs that exist", () => {
     const s = summarize([closed(100, "win", 2), closed(-30, "loss", null)]);
     expect(s.avgRR).toBe(2);
+  });
+});
+
+describe("strategyPerformance — the Playbook's per-strategy rows", () => {
+  const t = (strategy, pnl, result, status = "Closed", exitDateTime = "2026-07-10T11:00") =>
+    ({ strategy, status, pnlAmount: pnl, pnlPercent: pnl / 10, result, actualRR: 1, exitDateTime });
+
+  it("summarises each strategy against its own trades", () => {
+    const rows = strategyPerformance([
+      t("ICT", 100, "win"), t("ICT", -40, "loss"), t("Scalping", 20, "win"),
+    ], ["ICT", "Scalping"]);
+    expect(rows.map((r) => r.strategy)).toEqual(["ICT", "Scalping"]);
+    expect(rows[0].stats.net).toBe(60);
+    expect(rows[0].stats.winRate).toBe(50);
+    expect(rows[1].stats.net).toBe(20);
+  });
+
+  it("keeps the order the strategy list was given in", () => {
+    const rows = strategyPerformance([t("B", 10, "win")], ["B", "A", "C"]);
+    expect(rows.map((r) => r.strategy)).toEqual(["B", "A", "C"]);
+  });
+
+  it("gives an untraded strategy a row, so its note still has a home", () => {
+    const [row] = strategyPerformance([], ["ICT"]);
+    expect(row).toMatchObject({ strategy: "ICT", total: 0, open: 0, lastExit: "" });
+    expect(row.stats.count).toBe(0);
+    expect(row.stats.winRate).toBeNull();
+  });
+
+  it("counts open trades in the total but leaves them out of the stats", () => {
+    const [row] = strategyPerformance([
+      t("ICT", 100, "win"), t("ICT", null, null, "Open", ""),
+    ], ["ICT"]);
+    expect(row.total).toBe(2);
+    expect(row.open).toBe(1);
+    expect(row.stats.count).toBe(1);
+  });
+
+  it("reports the latest exit, for the 'last closed' line", () => {
+    const [row] = strategyPerformance([
+      t("ICT", 10, "win", "Closed", "2026-07-02T10:00"),
+      t("ICT", 10, "win", "Closed", "2026-07-19T10:00"),
+      t("ICT", 10, "win", "Closed", "2026-07-11T10:00"),
+    ], ["ICT"]);
+    expect(row.lastExit).toBe("2026-07-19T10:00");
+  });
+
+  // A note deliberately survives its strategy being removed from the list
+  // (normalizeStrategyNotes keeps orphans); the trades behind it must not be
+  // folded into some other row in the meantime.
+  it("does not attribute a removed strategy's trades to anyone else", () => {
+    const rows = strategyPerformance([t("Retired", 500, "win"), t("ICT", 10, "win")], ["ICT"]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].stats.net).toBe(10);
+  });
+
+  it("ignores trades with no strategy at all", () => {
+    const rows = strategyPerformance([t("", 100, "win"), t(undefined, 50, "win")], ["ICT"]);
+    expect(rows[0].total).toBe(0);
+  });
+});
+
+describe("describeFilters — the chips above the trades table", () => {
+  const keys = (f) => describeFilters(f).map((c) => c.key);
+  const labels = (f) => describeFilters(f).map((c) => c.label);
+
+  it("says nothing when nothing is narrowing the list", () => {
+    expect(describeFilters(DEFAULT_FILTERS)).toEqual([]);
+    expect(describeFilters({})).toEqual([]);
+    expect(describeFilters(null)).toEqual([]);
+  });
+
+  it("names each active filter in words a trader would use", () => {
+    expect(labels({ ...DEFAULT_FILTERS, search: "btc", status: "Open", asset: "BTCUSDT", result: "win", tag: "london", rrMin: "2" }))
+      .toEqual(['Search "btc"', "Open trades", "BTCUSDT", "Wins only", "#london", "RR ≥ 2"]);
+  });
+
+  it("carries a patch that clears only its own filter", () => {
+    const [chip] = describeFilters({ ...DEFAULT_FILTERS, asset: "BTCUSDT", strategy: "ICT" });
+    expect(chip.clear).toEqual({ asset: "" });
+  });
+
+  // A date preset and a custom range are one narrowing made of several fields:
+  // dropping either end has to take the "custom" preset with it, or the panel
+  // sits on "Custom range" with nothing in it and the chips read as empty.
+  it("drops a date preset together with the range it was holding", () => {
+    const [preset] = describeFilters({ ...DEFAULT_FILTERS, datePreset: "month" });
+    expect(preset).toMatchObject({ label: "This month", clear: { datePreset: "", dateFrom: "", dateTo: "" } });
+
+    const chips = describeFilters({ ...DEFAULT_FILTERS, datePreset: "custom", dateFrom: "2026-07-01", dateTo: "2026-07-31" });
+    expect(chips.map((c) => c.label)).toEqual(["From 2026-07-01", "To 2026-07-31"]);
+    expect(chips[0].clear).toEqual({ dateFrom: "", datePreset: "" });
+  });
+
+  it("treats an empty custom range as one chip, not none", () => {
+    expect(labels({ ...DEFAULT_FILTERS, datePreset: "custom" })).toEqual(["Custom range"]);
+  });
+
+  it("ignores whitespace-only values, which narrow nothing", () => {
+    expect(keys({ ...DEFAULT_FILTERS, search: "   ", asset: "" })).toEqual([]);
+  });
+
+  it("keeps one chip per key, so each has something unique to remove", () => {
+    const all = describeFilters({
+      ...DEFAULT_FILTERS, search: "a", status: "Closed", datePreset: "week", asset: "EURUSD",
+      marketType: "Forex", direction: "Long", strategy: "ICT", result: "loss", tag: "ny", rrMin: "1", rrMax: "5",
+    });
+    expect(new Set(all.map((c) => c.key)).size).toBe(all.length);
+    expect(all).toHaveLength(11);
+  });
+});
+
+describe("dayBreakdown — the calendar's read of a period", () => {
+  const byDay = {
+    "2026-07-10": { pnl: 250, count: 3 },
+    "2026-07-11": { pnl: -80, count: 2 },
+    "2026-07-12": { pnl: 0, count: 1 },
+    "2026-07-13": { pnl: 40, count: 1 },
+  };
+
+  it("finds the best and worst day, with the trades behind each", () => {
+    const d = dayBreakdown(byDay);
+    expect(d.best).toEqual({ key: "2026-07-10", pnl: 250, count: 3 });
+    expect(d.worst).toEqual({ key: "2026-07-11", pnl: -80, count: 2 });
+  });
+
+  it("splits the days green / red / flat, counting a scratch day as neither", () => {
+    const d = dayBreakdown(byDay);
+    expect(d).toMatchObject({ green: 2, red: 1, flat: 1, tradedDays: 4 });
+  });
+
+  it("averages over trading days, not calendar days", () => {
+    // 210 over the four days that actually traded, not over a whole month.
+    expect(dayBreakdown(byDay).avgDay).toBe(52.5);
+  });
+
+  it("reports nulls, not zeroes, for a period with nothing closed in it", () => {
+    const d = dayBreakdown({});
+    expect(d).toEqual({ best: null, worst: null, green: 0, red: 0, flat: 0, tradedDays: 0, avgDay: null });
+    expect(dayBreakdown(undefined).best).toBeNull();
+  });
+
+  it("keeps the earlier day when two tie", () => {
+    const d = dayBreakdown({ "2026-07-01": { pnl: 100, count: 1 }, "2026-07-02": { pnl: 100, count: 1 } });
+    expect(d.best.key).toBe("2026-07-01");
+  });
+
+  it("handles a single losing day as both best and worst", () => {
+    const d = dayBreakdown({ "2026-07-01": { pnl: -50, count: 2 } });
+    expect(d.best.key).toBe("2026-07-01");
+    expect(d.worst.key).toBe("2026-07-01");
+    expect(d).toMatchObject({ green: 0, red: 1, flat: 0 });
   });
 });
 
@@ -1121,6 +1274,73 @@ describe("tzOffsetLabel", () => {
 
   it("returns empty for an unknown zone", () => {
     expect(tzOffsetLabel("Not/AZone")).toBe("");
+  });
+});
+
+describe("timezone picker options", () => {
+  const AT = new Date("2026-07-15T12:00:00Z");
+  const ZONES = ["Asia/Kolkata", "America/New_York", "Europe/Paris", "Asia/Tokyo", "America/Los_Angeles", "Asia/Kathmandu", "UTC"];
+
+  // Offset first, "GMT" after: a column of these lines up on the sign and
+  // climbs +01:00 → +01:30 → +02:00, which is the whole point of the grouping.
+  it("pads every offset to a fixed width so the list reads as a ladder", () => {
+    expect(offsetLabelPadded(330)).toBe("+05:30 GMT");
+    expect(offsetLabelPadded(-240)).toBe("-04:00 GMT");
+    expect(offsetLabelPadded(0)).toBe("+00:00 GMT");
+    expect(offsetLabelPadded(NaN)).toBe("");
+  });
+
+  it("orders ascending by offset, zone id as the tiebreak", () => {
+    const opts = timezoneOptions(ZONES, AT);
+    expect(opts.map((o) => o.id)).toEqual([
+      "America/Los_Angeles", "America/New_York", "UTC", "Europe/Paris",
+      "Asia/Kolkata", "Asia/Kathmandu", "Asia/Tokyo",
+    ]);
+    expect(opts.map((o) => o.mins)).toEqual([...opts.map((o) => o.mins)].sort((a, b) => a - b));
+  });
+
+  it("splits the id into a searchable region and city", () => {
+    const [kolkata] = timezoneOptions(["Asia/Kolkata"], AT);
+    expect(kolkata).toMatchObject({ region: "Asia", city: "Kolkata", label: "+05:30 GMT" });
+    // Underscores are an id detail, not something anyone types or reads.
+    const [ny] = timezoneOptions(["America/New_York"], AT);
+    expect(ny.city).toBe("New York");
+    expect(ny.search).toContain("new york");
+  });
+
+  it("drops junk ids instead of sorting NaN into the list", () => {
+    expect(timezoneOptions(["Not/AZone", "Asia/Tokyo", 7, null], AT).map((o) => o.id)).toEqual(["Asia/Tokyo"]);
+    expect(timezoneOptions(null, AT)).toEqual([]);
+  });
+
+  it("searches the id and the offset, every term having to match", () => {
+    const opts = timezoneOptions(ZONES, AT);
+    const ids = (q) => filterTimezoneOptions(opts, q).map((o) => o.id);
+    expect(ids("kolkata")).toEqual(["Asia/Kolkata"]);
+    expect(ids("new york")).toEqual(["America/New_York"]);
+    expect(ids("asia tokyo")).toEqual(["Asia/Tokyo"]);
+    expect(ids("asia york")).toEqual([]);
+    expect(ids("")).toEqual(opts.map((o) => o.id));
+  });
+
+  it("matches an offset written any of the ways a trader writes it", () => {
+    const opts = timezoneOptions(ZONES, AT);
+    const ids = (q) => filterTimezoneOptions(opts, q).map((o) => o.id);
+    expect(ids("gmt+05:30")).toEqual(["Asia/Kolkata"]);
+    expect(ids("+5:30")).toEqual(["Asia/Kolkata"]);
+    expect(ids("05:30")).toEqual(["Asia/Kolkata"]);
+    // Unsigned reaches either side of the meridian; signed does not.
+    expect(ids("4:00")).toEqual(["America/New_York"]);
+    expect(ids("+4:00")).toEqual([]);
+  });
+
+  it("buckets the options into one group per offset, order kept", () => {
+    const groups = groupTimezoneOptions(timezoneOptions(ZONES, AT));
+    expect(groups.map((g) => g.label)).toEqual([
+      "-07:00 GMT", "-04:00 GMT", "+00:00 GMT", "+02:00 GMT", "+05:30 GMT", "+05:45 GMT", "+09:00 GMT",
+    ]);
+    expect(groups[0].zones.map((z) => z.id)).toEqual(["America/Los_Angeles"]);
+    expect(groupTimezoneOptions([])).toEqual([]);
   });
 });
 

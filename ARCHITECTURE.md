@@ -185,7 +185,18 @@ Because the key ignores time-of-day, a day is bounded by its local midnight and 
 
 The setting reaches leaf components through `TimezoneContext` in App.tsx (default `""`), not props — and that default is load-bearing: the component tests render `TradeForm`/`TradesTable` without the provider and get legacy machine-zone behaviour. An unknown zone id (a journal restored onto a runtime with an older tz database) normalizes to `""` in `mergeSettings` rather than failing the load.
 
-`tzOffsetLabel(tz, at)` renders a zone's live GMT offset (`GMT+5:30`, `GMT-4`) — derived from `zonedNow` so the two can never disagree, and "now"-relative because DST moves it through the year. It labels every option in the Settings picker and marks the topbar clock whenever the journal is pinned to a zone, so a clock that disagrees with the machine's taskbar explains itself. The clock itself renders 12- or 24-hour from `preferences.clockFormat` (`"12h"` legacy default, constrained in `mergePreferences`).
+`tzOffsetLabel(tz, at)` renders a zone's live GMT offset (`GMT+5:30`, `GMT-4`) — derived from `zonedNow` so the two can never disagree, and "now"-relative because DST moves it through the year. It marks the topbar clock whenever the journal is pinned to a zone, so a clock that disagrees with the machine's taskbar explains itself. The clock itself renders 12- or 24-hour from `preferences.clockFormat` (`"12h"` legacy default, constrained in `mergePreferences`).
+
+#### Picking a zone
+
+The runtime hands over ~400 IANA ids (`Intl.supportedValuesOf("timeZone")`). A `<select>` of that length has no search and no structure, so Settings uses `TimezonePicker`, a combobox over the same list:
+
+- **Ascending by offset**, zone id as the tiebreak, so "somewhere around GMT+02:00" is one contiguous block rather than an alphabetical scatter.
+- **One sticky heading per distinct offset**, rendered by `offsetLabelPadded` as a fixed-width `+HH:MM GMT` — offset first, so a column of them lines up on the sign. Every heading being the same shape is what makes the list read as an even ladder of :00/:30 steps (with the genuine :45 zones — Kathmandu, Chatham — sitting in it honestly rather than being rounded away).
+- **Search over city, region or offset**, every whitespace-separated term having to match (`filterTimezoneOptions`): "asia 05:30" narrows, "asia york" finds nothing. An offset can be typed as `gmt+5:30`, `+5:30`, `5:30` or `05:30`; unsigned reaches both sides of the meridian.
+- Keyboard: ↑/↓/Home/End move the cursor, Enter picks, Escape closes, and the list is a real `listbox` with `aria-activedescendant` on the search input.
+
+`timezoneOptions` / `filterTimezoneOptions` / `groupTimezoneOptions` live in `lib/trade.ts` and are pure, so the ordering and matching rules are pinned by tests rather than asserted through a rendered popover; the component is only the widget. Two behaviours it keeps from the old `<select>`: the machine's own zone is offered first as **System** and reports `""` (not the machine's id) when picked, and a zone this runtime doesn't list — a journal restored from a machine with a newer tz database — stays displayed and selected rather than silently snapping to System.
 
 ### The journal (three grains)
 
@@ -197,7 +208,15 @@ Each grain carries its **own** session-only filter (inclusive range in the grain
 
 ### The strategy playbook
 
-`settings.strategyNotes` (name → free text, `normalizeStrategyNotes`) renders on its own **Playbook tab** — moved out of Settings in 3.3 because a playbook is a working document a trader keeps open next to the charts, not configuration. The tab shows a per-strategy trade count and opens the same `StrategyManager` the trade form uses. A note survives its strategy being renamed away or removed; the name coming back finds it intact.
+`settings.strategyNotes` (name → free text, `normalizeStrategyNotes`) renders on its own **Playbook tab** — moved out of Settings in 3.3 because a playbook is a working document a trader keeps open next to the charts, not configuration. It opens the same `StrategyManager` the trade form uses. A note survives its strategy being renamed away or removed; the name coming back finds it intact.
+
+Each note sits directly under what that strategy actually returned — trades (with the open count), win rate, net P&L, average RR, profit factor, a win/loss bar and the last close date — from `strategyPerformance(trades, strategies)` in `lib/trade.ts`, which is `summarize()` per name plus the open-trade count that `summarize` deliberately excludes. The panel adds a search over **names and note text** ("liquidity" should find the strategy whose playbook mentions it) and sorts by list order / most traded / best P&L / best win rate. Three rules the sorting keeps:
+
+- A strategy with **no** closed trades has no P&L or win rate to rank on, so it sorts *last* under the result-based sorts rather than tying with a genuine zero.
+- An untraded strategy still gets a row. The note is the point of the tab; a blank record is not a reason to hide the page it is written on.
+- A trade tagged with a strategy that has since been removed from the list is **not** folded into another row. It has no row at all — the same way its note survives unattached.
+
+The panel takes `scopedTrades`, so the numbers follow the account in view like everything else outside Analytics.
 
 `settings.strategyNotes` (the Strategy Playbook panel in Settings) is a name → text map through `normalizeStrategyNotes`: blanks dropped, 5000-char cap. Notes are keyed by strategy *name*, and a note whose strategy is renamed or removed is deliberately kept — StrategyManager can't rewrite settings from every mount point, and the cheap failure mode (an orphaned note waiting for its name to come back) beats the expensive one (a rename silently destroying a playbook page).
 
@@ -211,6 +230,16 @@ Each grain carries its **own** session-only filter (inclusive range in the grain
 
 The **Cashflow tab** owns a session-only filter (`filterTransactions`: type / inclusive day range / note text) that narrows the list **and** its running-balance column — the request was explicit that this filter touches nothing else in the app. The running-balance column is computed over the *filtered* set, oldest→newest off the account's starting balance, so the column reads exactly what the filter shows; the Account Balance card stays on the *unfiltered* real figure, because a view filter narrows what you inspect, not the money you hold. Deposits/withdrawals render with the neutral `--accent` and direction icons, never the P&L green/red (see [§ Styling](#styling)).
 
+## Calendar
+
+One `PerformanceCalendar` renders five views (daily / weekly / monthly / yearly / custom) off one `byDay` map — day key → `{ pnl, count }`, built from **closed** trades by exit time — so every figure on the page comes from the same source and cannot disagree with the cells beside it.
+
+- **Week totals.** The monthly grid is seven day cells plus that week's own summary cell, padded to whole weeks. It sums the same `byDay` entries the row displays, so a day outside the month in view simply isn't in the map and contributes nothing.
+- **`dayBreakdown()`** (`lib/trade.ts`, pure and tested) reads that map as a whole: best day, worst day, the green/red/flat split, and the average *trading* day. Days are the unit risk is actually managed in — a daily-loss-limit rule is written against one — and "eleven green against four red" says something the per-trade win rate doesn't. The Best/Worst cards open that day's trades: the number is only useful next to what made it.
+- **Every cell does something.** A day with trades opens them; a day without opens its note. A cell that looks like a button and does nothing is worse than one that does the only useful thing available.
+- **Heat scale.** Shading is P&L against the largest absolute day (or month, in the yearly view) *in view*, so the scale re-fits per period; the legend states both ends and what they mean. A month cell in the yearly grid drills into that month.
+- **Today** is one click from anywhere. The button disables rather than hides when the cursor is already there, so it never moves under the pointer.
+
 ## Authentication
 
 An **opt-in, soft** login gate. `lib/auth.ts` is pure (PBKDF2-SHA-256 on `globalThis.crypto.subtle` — present in the browser, the Electron renderer and Node's test runtime): it hashes passwords, and normalizes/looks up user records. No password is ever stored — only a per-user random salt and the derived hash. The store lives in its **own** key `AUTH_KEY` (`brij-tj-auth-v1`), deliberately **outside** the meta blob, so password hashes never ride along in a journal backup export.
@@ -220,6 +249,22 @@ An **opt-in, soft** login gate. `lib/auth.ts` is pure (PBKDF2-SHA-256 on `global
 - **`signedIn` is derived, not stored** — `authUser && users.some(u => u.id === authUser.id)`. Removing the session's user (or the whole store) recomputes it to `false` and the gate returns, with no `setState`-in-effect needed. The session lives in memory only, so closing the app signs out.
 - **A read failure leaves the gate off** rather than locking the owner out of their own data — the same fail-open stance the trade loader takes with `loadError` (fail-safe there, because writing an empty journal would delete it; fail-open here, because a hashing store the app can't read should never trap the owner).
 - **Multi-user and web-future ready.** The store is a *list*, and `AuthGate` is a dumb screen that calls `verifyPassword`. A later internet-connected build swaps that local verify for a network call and moves the `{id, username, salt, hash}` shape server-side without the app shell changing. This is a gate on the running app, **not** disk encryption — the journal files are still plain on disk.
+
+### Sign-up, and why it is off by default
+
+`AuthGate` has two tabs, Sign in and Create account. The create path is gated on `allowSignup`, **off by default**: a login screen anyone can register past protects nothing, so on a single-owner machine the honest behaviour is to refuse and say why (the tab explains that an existing user must add the account from Settings > Security) rather than hide the control. The owner turns it on in Settings > Security for a shared desk where each person should have their own login — every account still opens the same journal; this is one book with several keys, not separate books.
+
+The one exception is a journal with **no** accounts yet: there is nothing to sign in to, so the first sign-up is always allowed — that is how the gate gets turned on from the login screen at all. (`AuthGate` never renders in that state today, since zero users means no gate; the allowance exists so the screen is correct if it is ever reached, e.g. a build that opens on it.)
+
+`allowSignup` is stored **in the auth blob, not settings**, for the same reason the user list is: the meta blob is what a journal backup carries, and restoring someone else's backup must not be able to switch self-signup on.
+
+### The Profile tab
+
+Appears only while signed in — with the gate off there is no user for it to be about — and is appended to `NAV` rather than slotted in, so `Ctrl/Cmd+1–9` keeps pointing at the same tabs it always did. It covers the person at the keyboard: avatar (falling back to initials), display name, username, member since, last sign-in, sign out, and a password change. Administration of *who may sign in at all* stays in Settings > Security; the two are deliberately separate screens.
+
+Three additive fields carry it, each optional with a fallback so a store written before them loads unchanged: `displayName` (decoration — sign-in never looks at it; `displayNameOf()` falls back to the username), `avatar` (an inline `data:image/…` URL, downscaled by the picker and capped by `AVATAR_MAX_CHARS`, because this record is read on every launch), and `lastLoginAt` (stamped by the gate on a successful sign-in). The **username is not editable**: it is the identity every stored record is keyed to.
+
+`changePassword()` verifies the current password before re-hashing — an unattended signed-in session must not be enough to take the account over — and draws a **fresh salt** with the new hash, so the old and new hashes aren't related in the store.
 
 ## Trade ids
 
@@ -238,6 +283,12 @@ Tab switches run through `withTabTransition`, which uses the View Transitions AP
 The freeze itself is `useBodyScrollLock()` — one module-level reference count shared by every `Modal` instance and `CommandPalette`, not each locking and restoring independently. The palette is deliberately allowed to open *on top of* a modal (Ctrl/Cmd+K works from inside a dialog), so two lockers being alive at once is normal; only the count reaching 0 touches the DOM, so whichever order they close in, the body ends up correctly unlocked. Two independent locks used to do this — closing the modal before the palette that opened on top of it left the body at `overflow: hidden` forever, with nothing left open to blame. See [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 **Command palette** — Ctrl/Cmd+K. Actions (new trade, tab jumps, sidebar, shortcuts, the 12 themes) plus a live trade search over the whole journal (id / symbol / direction / status / market / strategy / tags / account — global on purpose, not scoped to the account in view). Matching and ranking are `paletteFilter()` in `lib/trade.ts` — pure, token-AND, word-start-over-mid-word — pinned by tests; the component in App.tsx is just the shell. With no query only the leading actions show, so the idle list stays short.
+
+**Trades table — reading what is on screen.** Three things answer "what am I actually looking at":
+
+- A **totals row** (`<tfoot>`) over the trades the table was handed — which are the *filtered* ones, so it totals exactly what the filter selected, across pages and not just the visible one. `leadingCols` counts the columns before P&L so the summary spans them and each figure sits under the column it totals whatever the user has hidden; the P&L of a set with nothing closed reads `—`, not `$0.00`. It is sticky to the bottom, as the header is to the top.
+- **Filter chips** under the filters bar, one per active narrowing, each removing only its own. `describeFilters()` (`lib/trade.ts`, pure and tested) produces them, and each chip carries a **patch** rather than a key so a filter made of several fields drops as a unit — clearing a date preset takes the custom range with it, and clearing either end of that range takes the "custom" preset. A collapsed panel reading "Filters (3)" is the reason a short list gets mistaken for missing trades.
+- **Open-trade age** beside the Open badge (`durationLabel(entry, now)`), because "Open" alone says nothing about a position that has been running a week. "Now" is `zonedNow(tz)` — the same naive wall-clock basis the stored trade times use.
 
 **Trades table — ServiceNow-style inline list edit.** Hovering a row reveals a pencil in each editable cell (double-click the cell works too); it turns that one cell into an input/select, and Enter (text) or picking an option (select) commits. The editable set is the **metadata** columns only — Symbol, Market, Direction, Grade, Status — never the computed P&L/RR figures, which stay behind the form. The renderer is a plain `inlineCell(...)` *function*, not a nested `<Component>`: a component defined inside render gets a fresh identity every pass and would remount the open editor mid-keystroke, blurring it — a function returning elements reconciles normally. Each commit routes through the same `onBulkEdit(ids, patch, label)` the selection bar uses (single-row batch), so the trade is **replaced not mutated** and `computeTrade`'s `WeakMap` cache re-derives — editing Direction re-signs P&L, editing Status flips open/closed, both correctly. Inline editing is disabled when no `onBulkEdit` is wired (the component tests exercise both paths).
 
@@ -263,9 +314,14 @@ Fonts (Inter, Space Grotesk, JetBrains Mono) are self-hosted via `@fontsource` i
 
 `saveTextExport` / `saveBinaryExport` in App.tsx hide the desktop/web split — Electron gets a native Save As through `window.desktopExport`, the web build downloads a blob. Every helper resolves `{ ok, canceled?, path? }` so callers can toast without caring which ran.
 
+**What goes *in* a report is not App.tsx's job.** `lib/report.ts` builds the documents (`reportChartData`, `reportChartsHtml`, `interactiveReportHtml`) and `lib/reportchart.ts` builds the pictures; App.tsx decides when to build one and where to save it. A report is a string, so it is testable in Node — which is why the escaping and the geometry are pinned by tests rather than by eyeballing a PDF.
+
+- **Charts in a report can't be Recharts** — that needs a live React tree, and a file on disk has none. `reportchart.ts` emits SVG (`svgLineChart`, `svgBarChart`, `svgDonut`) with its own axis scaling: `niceStep` rounds gridlines to a 1/2/5 × power of ten, and every degenerate input a real journal produces (nothing closed, one point, a flat curve, all-zero months) renders an empty-state line instead of a `NaN` path.
+- **Word gets a different rendering, on purpose.** Word's HTML importer drops inline SVG *silently* — the chart would simply be absent — so the Word path uses `htmlBarRows`, bars built from coloured table cells it can actually draw, and its "equity curve" is a bar per close measured from the starting balance. Don't unify the two paths.
+- **Interactive HTML** — one self-contained file: KPI strip, the same SVG charts, and a trade table that searches, filters (direction / result / strategy) and sorts, with a count strip that re-totals net P&L and win rate over whatever is showing. No network, no libraries. Everything its script needs rides on each row as `data-*`, so the table is complete and readable with scripting off; an open trade's P&L is deliberately **blank** rather than `0`, because the sort keeps blanks last in both directions and a zero would outrank every real loss.
 - **PDF** — desktop renders the report HTML in an offscreen `BrowserWindow` and calls `printToPDF` (a real PDF). Web writes the HTML into an offscreen iframe and opens the print dialog, where the user picks "Save as PDF".
 - **Excel** — `xlsx` is imported on demand *inside* the exporter, not at module scope, so it stays out of the main bundle.
-- **HTML / Word** — all free text goes through `escapeHtml()`. Symbols, strategy names and notes are user input; interpolated raw they break the document or inject tags.
+- **HTML / Word** — all free text goes through `escapeHtml()`, **including the values written into `data-*` attributes**. Symbols, strategy names, tags and notes are user input; interpolated raw they break the document or inject tags, and an attribute is just as reachable as a text node.
 - **CSV** — `tradesToCSV` / `parseCSV` are a matched pair: the quoting `csvCell` writes is exactly what `parseCSV` reads back. On import, `partitionDuplicateImports()` splits incoming rows against the journal by symbol + entry time; rows that match an existing trade (a statement imported twice) go to a choice dialog instead of landing silently, and rows dropped for having no symbol or entry price are counted in the result message rather than vanishing.
 
 Restoring a JSON backup is gated behind a confirmation showing both journals' trade counts — it replaces everything, same blast radius as Clear All. The backup export itself goes through `saveTextExport` like every other file, so the desktop build gets its native Save As.

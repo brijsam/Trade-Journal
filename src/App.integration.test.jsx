@@ -12,6 +12,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+// These are the only tests that mount the whole App — boot, storage reads,
+// effects and all — and each one waits on that loop settling. Under
+// `--coverage` the v8 instrumentation plus the other suites running alongside
+// pushes a boot past vitest's 5s default and the file fails as a batch while
+// passing on its own. The work is real, not a hang; this gives it room.
+vi.setConfig({ testTimeout: 20000 });
+
 // Charts are Recharts-backed and reached via React.lazy; nothing here is
 // about charting, so stub the module rather than let Suspense actually
 // resolve real chart components (and Recharts) inside jsdom.

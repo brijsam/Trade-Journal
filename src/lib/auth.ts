@@ -19,13 +19,27 @@
 // ============================================================================
 import { uid } from "./trade";
 
+/* `displayName`, `avatar` and `lastLoginAt` are v3.5 additions and every one of
+   them is optional with a fallback — a store written before them loads
+   unchanged, which is the same rule the journal's own data model follows. The
+   identity that matters is still `username`: display name is decoration, and
+   sign-in never looks at it. */
 export interface AuthUser {
   id: string;
   username: string;
   salt: string;
   hash: string;
   createdAt: string;
+  displayName?: string;
+  avatar?: string;
+  lastLoginAt?: string;
 }
+
+export const DISPLAY_NAME_MAX = 40;
+// A profile photo is base64 in the same store the password hashes live in, so
+// it is capped: the picker downscales before it gets here, and anything past
+// this is refused rather than quietly bloating every auth read.
+export const AVATAR_MAX_CHARS = 400000;
 
 const PBKDF2_ITERATIONS = 120000;
 const HASH = "SHA-256";
@@ -82,7 +96,47 @@ export function normalizeUsers(users: unknown): AuthUser[] {
       salt: u.salt as string,
       hash: u.hash as string,
       createdAt: (u.createdAt as string) || "",
+      // Profile fields are optional and only kept when usable, so a record from
+      // before them — or a hand-edited one — normalizes to the same shape.
+      displayName: typeof u.displayName === "string" ? u.displayName.trim().slice(0, DISPLAY_NAME_MAX) : "",
+      avatar: typeof u.avatar === "string" && u.avatar.startsWith("data:image/") && u.avatar.length <= AVATAR_MAX_CHARS ? u.avatar : "",
+      lastLoginAt: typeof u.lastLoginAt === "string" ? u.lastLoginAt : "",
     }));
+}
+
+// What to call a user on screen: their own display name if they set one, else
+// the username they sign in with. Never blank.
+export function displayNameOf(user: Partial<AuthUser> | null | undefined): string {
+  const shown = typeof user?.displayName === "string" ? user.displayName.trim() : "";
+  return shown || normalizeUsername(user?.username) || "";
+}
+
+// The two things a profile can change about itself. Returns a new record —
+// never mutates — with both fields sanitized the same way normalizeUsers would
+// read them back, so what is saved is exactly what survives a reload.
+export function updateProfile(user: AuthUser, patch: { displayName?: unknown; avatar?: unknown }): AuthUser {
+  const next = { ...user };
+  if ("displayName" in patch) next.displayName = typeof patch.displayName === "string" ? patch.displayName.trim().slice(0, DISPLAY_NAME_MAX) : "";
+  if ("avatar" in patch) {
+    const a = patch.avatar;
+    next.avatar = typeof a === "string" && a.startsWith("data:image/") && a.length <= AVATAR_MAX_CHARS ? a : "";
+  }
+  return next;
+}
+
+/* Change a password: the current one must verify first, so someone at an
+   unattended signed-in session can't silently take the account over. A new salt
+   is drawn with the new hash — reusing the old salt would leave the two
+   passwords' hashes related in the store. Throws with a message the form shows
+   as-is. */
+export async function changePassword(user: AuthUser, currentPassword: unknown, newPassword: unknown): Promise<AuthUser> {
+  const ok = await verifyPassword(currentPassword, user.salt, user.hash);
+  if (!ok) throw new Error("Current password is incorrect.");
+  const next = String(newPassword ?? "");
+  if (next.length < 4) throw new Error("New password must be at least 4 characters.");
+  if (await verifyPassword(next, user.salt, user.hash)) throw new Error("That is already your password.");
+  const { salt, hash } = await hashPassword(next);
+  return { ...user, salt, hash };
 }
 
 // Case-insensitive lookup — usernames are unique by lowercased form.
@@ -94,10 +148,14 @@ export function findUser(users: unknown, username: unknown): AuthUser | null {
 
 // Build a new user record, hashing the password. Throws on a blank username or
 // password; the caller (the signup form) guards those first for a nicer message.
-export async function makeUser(username: unknown, password: unknown): Promise<AuthUser> {
+export async function makeUser(username: unknown, password: unknown, displayName?: unknown): Promise<AuthUser> {
   const name = normalizeUsername(username);
   if (!name) throw new Error("Username required");
   if (!password) throw new Error("Password required");
   const { salt, hash } = await hashPassword(password);
-  return { id: uid("USER"), username: name, salt, hash, createdAt: new Date().toISOString() };
+  return {
+    id: uid("USER"), username: name, salt, hash, createdAt: new Date().toISOString(),
+    displayName: typeof displayName === "string" ? displayName.trim().slice(0, DISPLAY_NAME_MAX) : "",
+    avatar: "", lastLoginAt: "",
+  };
 }

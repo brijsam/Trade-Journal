@@ -1,5 +1,5 @@
 import {
-  useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense, createContext, useContext, Component,
+  useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense, createContext, useContext, Component, Fragment,
   type ReactNode, type Dispatch, type SetStateAction, type ChangeEvent, type FormEvent, type KeyboardEvent,
   type MouseEvent as ReactMouseEvent, type CSSProperties, type RefObject,
 } from "react";
@@ -33,20 +33,26 @@ import {
   MARKET_TYPES, DIRECTIONS, GRADES, STATUS, DEFAULT_STRATEGIES, DEFAULT_GOALS,
   DEFAULT_CHECKLIST_RULES, DEFAULT_SETTINGS, DEFAULT_FILTERS, DEFAULT_PREFERENCES,
   SHARD_COUNT, META_KEY, SHARD_PREFIX, SHOTS_PREFIX, AUTH_KEY, shardKey, shardOf,
-  uid, nextTradeId, tradeSeq, pad, fmtDate, fmtDateTime, isoDate, isoWeekKey, monthKey, monthLabel,
-  weekOfMonthLabel, weekOfMonthKey, toLocalInputValue, parseLocalInputValue, zonedNow, tzOffsetLabel, tzOffsetMinutes,
+  uid, nextTradeId, tradeSeq, pad, fmtDate, fmtDateTime, isoDate, isoWeekKey, monthKey, monthLabel, durationLabel,
+  weekOfMonthLabel, weekOfMonthKey, toLocalInputValue, parseLocalInputValue, zonedNow, tzOffsetLabel,
+  timezoneOptions, filterTimezoneOptions, groupTimezoneOptions, type TimezoneOption,
   journalEntries, journalToMarkdown, journalToCSV, journalToHtml, filterJournalEntries, JOURNAL_KEY_PATTERNS, CHART_PERIOD_CHOICES, mostRecentTrades,
-  normalizeAccounts, mergeSettings, mergePreferences, clampZoom, stepZoom, startOfWeek, dateRangeForPreset, dateInRange,
+  normalizeAccounts, mergeSettings, mergePreferences, clampZoom, stepZoom, startOfWeek, dateRangeForPreset, dateInRange, describeFilters,
   groupPerformance, goalProgress, computeTrade, aggregateLegs, stripComputed,
   escapeHtml, tradesToCSV, parseCSV, rowsToTrades, partitionDuplicateImports, paletteFilter, normalizeAccent,
-  summarize, equityCurve, maxDrawdown, consecutiveStreaks, sharpeSortino,
+  summarize, strategyPerformance, dayBreakdown, equityCurve, maxDrawdown, consecutiveStreaks, sharpeSortino,
   emptyTrade, emptyLeg, withDerivedFills, tradeToForm, formSignature, tradeWarnings, PAGE_SIZES, DEFAULT_TABLE_SORT,
   normalizeTransactions, transactionsNet, filterTransactions, sortedTransactions,
   type Trade, type ComputedTrade, type Settings, type Preferences, type Account, type Transaction,
   type FillLeg, type Filters, type TableSort, type DateRange, type JournalGrain, type JournalEntry,
   type SummaryStats, type EquityPoint, type PerformanceRow, type Goals,
 } from "./lib/trade";
-import { normalizeUsers, findUser, makeUser, verifyPassword, type AuthUser } from "./lib/auth";
+import { normalizeUsers, findUser, makeUser, verifyPassword, displayNameOf, updateProfile, changePassword, type AuthUser } from "./lib/auth";
+// The exported reports draw their own charts and, for the interactive .html,
+// their whole document: Recharts needs a live React tree and a file on disk has
+// none. lib/report builds those as plain strings (charts from lib/reportchart);
+// this file only decides when to build one and where to save it.
+import { reportChartData, reportChartsHtml, interactiveReportHtml, REPORT_CHART_CSS } from "./lib/report";
 
 /* ============================================================================
    JOURNAL TIMEZONE
@@ -204,15 +210,15 @@ const TOKENS_MATERIAL_DARK = {
   "--loss": "#F28B82", "--loss-soft": "rgba(242,139,130,0.11)", "--loss-border": "rgba(242,139,130,0.33)",
   "--card-shadow": "0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 22px rgba(0,0,0,0.30)",
 };
-const TOKENS_NOCTURNE = {
-  "--bg-950": "#12141F", "--bg-900": "#161826", "--bg-800": "#1D1F2E", "--bg-700": "#232532",
-  "--bg-elevated": "#232532", "--border": "#333546", "--border-soft": "#2A2C3B",
-  "--text-primary": "#E9E9ED", "--text-secondary": "#B4B3C4", "--text-muted": "#7A7A93",
-  "--accent": "#9184D9", "--accent-soft": "rgba(145,132,217,0.14)",
-  "--accent-2": "#A7A1DB", "--accent-2-soft": "rgba(167,161,219,0.12)",
-  "--profit": "#7EC49B", "--profit-soft": "rgba(126,196,155,0.10)", "--profit-border": "rgba(126,196,155,0.32)",
-  "--loss": "#D98282", "--loss-soft": "rgba(217,130,130,0.10)", "--loss-border": "rgba(217,130,130,0.32)",
-  "--card-shadow": "0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 22px rgba(0,0,0,0.30)",
+const TOKENS_AMOLED_WHITE = {
+  "--bg-950": "#FFFFFF", "--bg-900": "#FFFFFF", "--bg-800": "#F7F7F7", "--bg-700": "#EFEFEF",
+  "--bg-elevated": "#FFFFFF", "--border": "#E0E0E0", "--border-soft": "#EDEDED",
+  "--text-primary": "#0A0A0A", "--text-secondary": "#5C5C5C", "--text-muted": "#8F8F8F",
+  "--accent": "#0091EA", "--accent-soft": "rgba(0,145,234,0.08)",
+  "--accent-2": "#B8860B", "--accent-2-soft": "rgba(184,134,11,0.10)",
+  "--profit": "#0E9F52", "--profit-soft": "rgba(14,159,82,0.08)", "--profit-border": "rgba(14,159,82,0.30)",
+  "--loss": "#E0233F", "--loss-soft": "rgba(224,35,63,0.08)", "--loss-border": "rgba(224,35,63,0.30)",
+  "--card-shadow": "0 1px 0 rgba(0,0,0,0.02) inset, 0 2px 10px rgba(0,0,0,0.06)",
 };
 const THEMES = {
   dark: { label: "Dark", icon: Moon, tokens: TOKENS_DARK },
@@ -227,7 +233,7 @@ const THEMES = {
   nord: { label: "Nord Dark", icon: Snowflake, tokens: TOKENS_NORD },
   dracula: { label: "Dracula", icon: Moon, tokens: TOKENS_DRACULA },
   material: { label: "Material Dark", icon: Moon, tokens: TOKENS_MATERIAL_DARK },
-  nocturne: { label: "Nocturne", icon: Moon, tokens: TOKENS_NOCTURNE },
+  amoledWhite: { label: "AMOLED White", icon: Sun, tokens: TOKENS_AMOLED_WHITE },
 };
 // Font faces are bundled locally and imported in main.jsx (see @fontsource
 // imports there). No remote @import — the packaged app must render its type
@@ -243,6 +249,20 @@ const THEMES = {
 ============================================================================ */
 const APP_CSS = `
 * { box-sizing: border-box; }
+/* Keyboard focus, once, for everything. Several inputs here set outline:none and
+   signal focus with a 1px border tint, which a keyboard user cannot reliably
+   see; this puts one unmistakable accent ring on whatever holds focus.
+   :focus-visible only, so clicking a button never leaves a ring behind — and
+   the wrappers below take the ring on behalf of the borderless input inside
+   them (search box, command palette, timezone search), which has no visible
+   edge of its own to draw it on. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.input:focus-visible, .th-sortable:focus-visible, .nav-item:focus-visible { outline-offset: -1px; }
+.search-box:focus-within, .palette-input-row:focus-within, .tz-search-row:focus-within { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* Off-screen until it takes focus, then it lands over the sidebar's top-left. */
+.skip-link { position: fixed; top: 8px; left: -9999px; z-index: 400; background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--accent); border-radius: 8px; padding: 9px 14px; font-size: 12.5px; font-weight: 600; text-decoration: none; }
+.skip-link:focus { left: 8px; }
+#app-content:focus { outline: none; }
 .app-root { font-family: 'Inter', system-ui, sans-serif; background: var(--bg-950); color: var(--text-primary); min-height: 100vh; display: flex; width: 100%; }
 .mono { font-family: 'JetBrains Mono', monospace; }
 .spin { animation: spin 0.9s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
@@ -349,7 +369,11 @@ const APP_CSS = `
 
 .table-wrap { overflow-x: auto; }
 .trades-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.trades-table th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); padding: 8px 10px; border-bottom: 1px solid var(--border); cursor: pointer; white-space: nowrap; user-select: none; }
+/* Sticky header: a 50-row page scrolls the labels off the top otherwise, and a
+   P&L column you can't name is just numbers. It sticks to .content-scroll, the
+   app's one scrolling pane, so it needs an opaque background of its own — the
+   rows would show through. */
+.trades-table th { position: sticky; top: 0; z-index: 2; background: var(--bg-900); text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); padding: 8px 10px; border-bottom: 1px solid var(--border); cursor: pointer; white-space: nowrap; user-select: none; }
 .trades-table td { padding: 9px 10px; border-bottom: 1px solid var(--border-soft); white-space: nowrap; }
 .trades-table tbody tr { cursor: pointer; transition: background 0.1s; }
 .trades-table tbody tr:hover { background: var(--bg-700); }
@@ -378,6 +402,16 @@ const APP_CSS = `
 .column-menu-item.column-locked:hover { background: transparent; color: var(--text-secondary); }
 .cell-strong { font-weight: 600; }
 /* Small inline marks on a table cell — a fills icon, a partial-close tag. */
+/* Totals for the filtered set, under the columns they total. Sticky to the
+   bottom so the figure stays put while the rows scroll past it. */
+.trades-total td { position: sticky; bottom: 0; background: var(--bg-900); border-top: 1px solid var(--border); border-bottom: none; font-weight: 600; padding: 10px; }
+.trades-total-label { font-size: 11px; color: var(--text-muted); font-weight: 500; }
+.cell-age { margin-left: 6px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--text-muted); }
+/* One chip per active filter, each dropping only its own narrowing. */
+.filter-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.filter-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 5px 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); white-space: nowrap; }
+.filter-chip button { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border: none; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; padding: 0; }
+.filter-chip button:hover { background: color-mix(in srgb, var(--accent) 25%, transparent); }
 .cell-mark { display: inline-flex; align-items: center; gap: 2px; margin-left: 5px; color: var(--text-muted); font-size: 8.5px; font-weight: 700; letter-spacing: 0.3px; vertical-align: middle; }
 .cell-mark-accent { color: var(--accent); }
 .muted { color: var(--text-muted); }
@@ -555,6 +589,22 @@ const APP_CSS = `
 .calendar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .calendar-header h4 { font-family: 'Space Grotesk', sans-serif; font-size: 14px; margin: 0; }
 .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+/* Seven days plus that week's own total. The summary column is narrower than a
+   day and not square — it is a readout, not a cell you can open. */
+.calendar-grid-weeks { grid-template-columns: repeat(7, 1fr) minmax(78px, 0.9fr); }
+.calendar-week-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 4px; border: 1px dashed var(--border-soft); border-radius: 8px; background: var(--bg-900); }
+.calendar-week-empty { opacity: 0.4; }
+.calendar-week-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 600; }
+.calendar-nav-right { display: flex; align-items: center; gap: 6px; }
+/* The best/worst day figures open that day's trades — the number is only useful
+   next to what made it. */
+.calendar-daylink { background: none; border: none; padding: 0; cursor: pointer; font: inherit; }
+.calendar-legend { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; font-size: 10.5px; color: var(--text-muted); }
+.calendar-legend-scale { display: flex; border-radius: 4px; overflow: hidden; border: 1px solid var(--border-soft); }
+.calendar-legend-scale span { width: 20px; height: 10px; display: block; }
+.calendar-legend-label { font-family: 'JetBrains Mono', monospace; }
+.calendar-legend-note { margin-left: auto; }
+@media (max-width: 720px) { .calendar-legend-note { margin-left: 0; flex-basis: 100%; } }
 .calendar-dow { margin-bottom: 4px; }
 .calendar-dow-cell { font-size: 10px; text-align: center; color: var(--text-muted); font-weight: 600; }
 .calendar-cell { position: relative; aspect-ratio: 1; border: 1px solid var(--border-soft); border-radius: 8px; background: transparent; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer; padding: 4px; }
@@ -587,6 +637,20 @@ const APP_CSS = `
 .day-focus-sub { font-size: 12px; color: var(--text-muted); }
 .day-focus-note { margin: 12px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--text-secondary); white-space: pre-wrap; }
 
+/* Strategy Playbook — each strategy's note sits under what that strategy
+   actually returned, so the plan is read next to its result. The win/loss bar
+   is P&L-derived, which is the one thing green/red is reserved for. */
+.playbook-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.playbook-card { background: var(--bg-900); border: 1px solid var(--border-soft); border-radius: 10px; padding: 12px 14px; }
+.playbook-stats { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
+.playbook-name { font-size: 13.5px; font-weight: 650; color: var(--text-primary); margin-right: auto; }
+.playbook-stat { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; }
+.playbook-stat b { color: var(--text-secondary); font-weight: 600; }
+.playbook-bar { display: flex; height: 4px; border-radius: 999px; overflow: hidden; background: var(--bg-700); margin-bottom: 10px; }
+.playbook-bar-win { background: var(--profit); }
+.playbook-bar-loss { background: var(--loss); }
+.playbook-count { display: block; margin-top: 6px; font-size: 10.5px; }
+
 /* Cashflow — deposit/withdrawal pills use the neutral accent + a direction
    icon, never profit/loss green/red (reserved for P&L). */
 .txn-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid var(--border); background: var(--bg-900); white-space: nowrap; }
@@ -611,6 +675,29 @@ const APP_CSS = `
 .auth-pw-wrap { position: relative; display: flex; align-items: center; }
 .auth-pw-wrap .input { padding-right: 38px; }
 .auth-pw-toggle { position: absolute; right: 6px; background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; display: flex; }
+.auth-tabs { width: 100%; max-width: none; margin: 14px 0 16px; }
+
+/* Profile — the signed-in user's own page, plus the topbar chip that opens it.
+   The avatar falls back to initials rather than a generic silhouette: with a
+   handful of accounts on one machine, two letters identify a person faster. */
+.profile-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.profile-avatar { position: relative; width: 64px; height: 64px; border-radius: 50%; background: var(--bg-700); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; overflow: hidden; cursor: pointer; flex-shrink: 0; }
+.profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.profile-initials { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 22px; color: var(--accent); }
+.profile-avatar-edit { position: absolute; inset: auto 0 0 0; background: rgba(0,0,0,0.55); color: #fff; display: flex; justify-content: center; padding: 2px 0; opacity: 0; transition: opacity 0.12s; }
+.profile-avatar:hover .profile-avatar-edit, .profile-avatar:focus-visible .profile-avatar-edit { opacity: 1; }
+.profile-id { min-width: 0; }
+.profile-id h3 { margin: 0 0 2px; font-size: 17px; }
+.profile-meta { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; font-size: 11.5px; color: var(--text-muted); }
+.profile-head-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.profile-chip { width: 24px; height: 24px; border-radius: 50%; background: var(--bg-700); border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: var(--accent); overflow: hidden; flex-shrink: 0; }
+.profile-chip img { width: 100%; height: 100%; object-fit: cover; }
+.user-chip { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px 4px 4px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-800); color: var(--text-secondary); font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600; cursor: pointer; max-width: 170px; }
+.user-chip:hover { color: var(--text-primary); border-color: var(--accent); }
+.user-chip-avatar { width: 22px; height: 22px; border-radius: 50%; background: var(--bg-700); display: inline-flex; align-items: center; justify-content: center; font-size: 9.5px; font-weight: 700; color: var(--accent); overflow: hidden; flex-shrink: 0; }
+.user-chip-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.user-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 860px) { .user-chip-name { display: none; } .user-chip { padding: 4px; } }
 
 .mini-compare { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 @media (max-width: 720px) { .mini-compare { grid-template-columns: 1fr; } }
@@ -709,6 +796,32 @@ const APP_CSS = `
 .palette-kbd { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 5px; padding: 2px 6px; flex-shrink: 0; }
 .palette-empty { padding: 22px 16px; font-size: 12.5px; color: var(--text-muted); text-align: center; }
 .palette-foot { padding: 8px 14px; border-top: 1px solid var(--border-soft); font-size: 10.5px; color: var(--text-muted); }
+
+/* Timezone combobox (Settings > About). A ~400-entry native <select> is a wall
+   of text with no search; this is the same list behind a type-ahead, grouped by
+   GMT offset with a sticky heading per offset so the ladder of :00/:30 steps
+   stays visible while scrolling. */
+.tz-picker { position: relative; }
+.tz-trigger { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; cursor: pointer; }
+.tz-trigger-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tz-trigger-off { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+/* Fixed, not absolute: the picker sits inside .content-scroll, which clips (and
+   scrolls) an absolutely-positioned child — opening the list near the bottom of
+   Settings cut it off mid-option. The component measures the trigger and sets
+   left/top/bottom/width inline, flipping the list above when there is no room
+   below. z-index clears the topbar (20) and the ticker, and stays under the
+   modal overlay (100) — this never opens over a dialog. */
+.tz-pop { position: fixed; z-index: 60; min-width: 280px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 18px 40px rgba(0,0,0,0.4); overflow: hidden; animation: modalIn 0.12s ease; display: flex; flex-direction: column; }
+.tz-search-row { display: flex; align-items: center; gap: 8px; padding: 9px 11px; border-bottom: 1px solid var(--border-soft); color: var(--text-muted); }
+.tz-search { flex: 1; min-width: 0; background: transparent; border: none; outline: none; color: var(--text-primary); font-family: 'Inter', sans-serif; font-size: 13px; }
+.tz-list { max-height: 302px; overflow-y: auto; overscroll-behavior: contain; padding: 4px; }
+.tz-group { position: sticky; top: 0; z-index: 1; background: var(--bg-800); color: var(--text-muted); font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.06em; padding: 5px 9px; border-radius: 6px; margin: 3px 0 2px; }
+.tz-opt { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 9px; border: none; border-radius: 7px; background: transparent; color: var(--text-secondary); font-family: 'Inter', sans-serif; font-size: 12.5px; text-align: left; cursor: pointer; }
+.tz-opt-active { background: var(--bg-700); color: var(--text-primary); }
+.tz-opt-selected { color: var(--accent); }
+.tz-opt-city { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tz-opt-region { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+.tz-empty { padding: 18px 12px; font-size: 12.5px; color: var(--text-muted); text-align: center; }
 
 /* Tab switches crossfade through the View Transitions API (see
    withTabTransition in App). Kept quick — this is a hint that the page
@@ -2007,7 +2120,8 @@ function DetailStat({ label, value }: { label: ReactNode; value: ReactNode }) { 
 /* ============================================================================
    FILTERS BAR
 ============================================================================ */
-function FiltersBar({ filters, setFilters, assets, strategies, tags = [] }: { filters: Filters; setFilters: Dispatch<SetStateAction<Filters>>; assets: string[]; strategies: string[]; tags?: string[] }) {
+// Exported for the component smoke tests (App.test.jsx).
+export function FiltersBar({ filters, setFilters, assets, strategies, tags = [] }: { filters: Filters; setFilters: Dispatch<SetStateAction<Filters>>; assets: string[]; strategies: string[]; tags?: string[] }) {
   const [open, setOpen] = useState(false);
   // The search term lives here and only lands in the shared filters once typing
   // pauses. Committing per keystroke re-filters the whole journal and schedules
@@ -2024,7 +2138,16 @@ function FiltersBar({ filters, setFilters, assets, strategies, tags = [] }: { fi
   // Resets the draft too — it is the only thing that clears search from outside
   // the input, so no separate syncing effect is needed.
   const reset = () => { setSearchDraft(""); setFilters(DEFAULT_FILTERS); };
-  const activeCount = Object.values(filters).filter(Boolean).length;
+  // What is actually narrowing the list, spelled out. describeFilters is pure
+  // (lib/trade) — this only renders the chips and applies the patch each one
+  // carries. Dropping the search chip has to reset the draft too, or the
+  // debounce effect above would put the term straight back.
+  const chips = describeFilters(filters);
+  const dropChip = (chip: { key: string; clear: Partial<Filters> }) => {
+    if (chip.key === "search") setSearchDraft("");
+    setFilters((f) => ({ ...f, ...chip.clear }));
+  };
+  const activeCount = chips.length;
   return (
     <div className="filters-bar">
       <div className="filters-row">
@@ -2035,6 +2158,16 @@ function FiltersBar({ filters, setFilters, assets, strategies, tags = [] }: { fi
         <button className="btn btn-ghost" onClick={() => setOpen((o) => !o)}><Filter size={14} /> Filters {activeCount > 0 && <span className="filter-count">{activeCount}</span>} {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
         {activeCount > 0 && <button className="btn btn-ghost" onClick={reset}><RotateCcw size={14} /> Reset</button>}
       </div>
+      {chips.length > 0 && (
+        <div className="filter-chips" role="list" aria-label="Active filters">
+          {chips.map((chip) => (
+            <span className="filter-chip" role="listitem" key={chip.key}>
+              {chip.label}
+              <button type="button" aria-label={`Remove filter: ${chip.label}`} title="Remove this filter" onClick={() => dropChip(chip)}><X size={11} /></button>
+            </span>
+          ))}
+        </div>
+      )}
       {open && (
         <div className="filters-expanded">
           <Field label="Date Preset">
@@ -2103,6 +2236,9 @@ interface TradesTableProps {
 }
 export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDelete, onBulkEdit, onToast, accounts = [], strategies = [], showAccount = false, hiddenColumns, onToggleColumn, initialSort = DEFAULT_TABLE_SORT, onSortChange, initialPageSize = 50, onPageSizeChange }: TradesTableProps) {
   const tz = useJournalTz();
+  // One "now" per render for the open-trade ages, in the journal's zone — the
+  // same naive wall-clock basis the stored trade times use.
+  const now = zonedNow(tz);
   // Sort and page size live here but seed from preferences and report changes
   // back up — the table unmounts on every tab switch, and coming back to a
   // reshuffled table reads as the data having changed.
@@ -2193,7 +2329,15 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, [colMenuOpen]);
-  const selectedTrades = useMemo(() => trades.filter((t) => selectedIds.includes(t.id)), [trades, selectedIds]);
+  /* Selection membership is read once per row per render, plus once per row of
+     the whole (unpaginated) list to build `selectedTrades` — an array
+     `includes` there is O(rows × selected), which on a five-figure journal with
+     a few hundred rows ticked is millions of comparisons on every keystroke
+     that re-renders this table. One Set per render is the same information at
+     O(1) a lookup. Same reasoning as the sort's decorate-sort-undecorate above:
+     derive per row, never per comparison. */
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const selectedTrades = useMemo(() => trades.filter((t) => selectedSet.has(t.id)), [trades, selectedSet]);
   const compareTrades = selectedTrades.slice(0, 2);
 
   const sorted = useMemo(() => {
@@ -2274,14 +2418,15 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
   // click silently selecting rows on other pages is a trap when the next click
   // is Delete.
   const pageIds = pageItems.map((t) => t.id);
-  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.includes(id));
-  const somePageSelected = pageIds.some((id) => selectedIds.includes(id));
+  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedSet.has(id));
+  const somePageSelected = pageIds.some((id) => selectedSet.has(id));
   const headerCbRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (headerCbRef.current) headerCbRef.current.indeterminate = somePageSelected && !allPageSelected;
   }, [somePageSelected, allPageSelected]);
   const togglePageSelection = () => {
-    setSelectedIds((ids) => (allPageSelected ? ids.filter((id) => !pageIds.includes(id)) : [...new Set([...ids, ...pageIds])]));
+    const onPage = new Set(pageIds);
+    setSelectedIds((ids) => (allPageSelected ? ids.filter((id) => !onPage.has(id)) : [...new Set([...ids, ...pageIds])]));
   };
 
   const exportSelectedCSV = async () => {
@@ -2300,17 +2445,37 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
     }
   };
 
+  /* The totals row's geometry and figures. `leadingCols` is every column before
+     P&L — checkbox, then whichever of id/account/symbol/market/direction/entry/
+     exit are switched on — so the summary spans them and the money lines up
+     under its own column whatever the user has hidden. */
+  const leadingCols = 1 + [show("id"), showAccount && show("account"), true, show("marketType"), show("direction"), show("entryDateTime"), show("exitDateTime")].filter(Boolean).length;
+  const totals = useMemo(() => summarize(trades), [trades]);
+  const openShown = useMemo(() => trades.filter((t) => t.status !== "Closed").length, [trades]);
+  // summarize() has no expected-RR average — it is a *plan* figure, not a
+  // result, and belongs only in this row where it sits beside the actual.
+  const avgExpectedRR = useMemo(() => {
+    const rrs = trades.map((t) => t.expectedRR).filter((v): v is number => v !== null && Number.isFinite(v));
+    return rrs.length ? rrs.reduce((s, v) => s + v, 0) / rrs.length : null;
+  }, [trades]);
+
   const th = (key: string, label: string) => {
     const active = sortKey === key;
+    const sort = () => {
+      const next: TableSort = active ? { key, dir: sortDir === "asc" ? "desc" : "asc" } : { key, dir: "desc" };
+      setSortKey(next.key); setSortDir(next.dir);
+      onSortChange?.(next);
+    };
     return (
+      // Focusable, and Enter/Space sort it: a click-only header is unreachable
+      // without a mouse, and sorting is the table's primary control. The <th>
+      // keeps its implicit columnheader role — aria-sort belongs on the header
+      // itself, not on an inner button.
       <th
-        className="th-sortable" title={`Sort by ${label}`}
+        className="th-sortable" title={`Sort by ${label}`} tabIndex={0}
         aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
-        onClick={() => {
-          const next: TableSort = active ? { key, dir: sortDir === "asc" ? "desc" : "asc" } : { key, dir: "desc" };
-          setSortKey(next.key); setSortDir(next.dir);
-          onSortChange?.(next);
-        }}
+        onClick={sort}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sort(); } }}
       >
         {label}{" "}
         {active
@@ -2397,8 +2562,8 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
         </thead>
         <tbody ref={tbodyRef}>
           {pageItems.map((t, i) => (
-            <tr key={t.id} className={`${t.result === "win" ? "row-win" : t.result === "loss" ? "row-loss" : ""} ${selectedIds.includes(t.id) ? "row-selected" : ""} ${i === cursorIdx ? "row-cursor" : ""}`} onClick={() => onView(t)}>
-              <td onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label={`Select ${t.id}`} checked={selectedIds.includes(t.id)} onChange={() => toggleSelected(t.id)} /></td>
+            <tr key={t.id} className={`${t.result === "win" ? "row-win" : t.result === "loss" ? "row-loss" : ""} ${selectedSet.has(t.id) ? "row-selected" : ""} ${i === cursorIdx ? "row-cursor" : ""}`} onClick={() => onView(t)} aria-selected={selectedSet.has(t.id)}>
+              <td onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label={`Select ${t.id}`} checked={selectedSet.has(t.id)} onChange={() => toggleSelected(t.id)} /></td>
               {show("id") && <td className="mono muted">{t.id}</td>}
               {showAccount && show("account") && <td className="muted">{t._accountName}</td>}
               {inlineCell(t, "symbol", (
@@ -2419,7 +2584,14 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
               {show("expectedRR") && <td className="mono">{t.expectedRR !== null ? `${fmtNum(t.expectedRR)}R` : "—"}</td>}
               {show("actualRR") && <td className="mono">{t.actualRR !== null ? `${fmtNum(t.actualRR)}R` : "—"}</td>}
               {show("grade") && inlineCell(t, "grade", <Badge tone="gold">{t.grade}</Badge>)}
-              {show("status") && inlineCell(t, "status", <Badge tone={t.status === "Open" ? "accent" : "neutral"}>{t.status}</Badge>)}
+              {/* An open trade carries how long it has been open: "Open" alone
+                  says nothing about a position that has been running a week. */}
+              {show("status") && inlineCell(t, "status", (
+                <>
+                  <Badge tone={t.status === "Open" ? "accent" : "neutral"}>{t.status}</Badge>
+                  {t.status === "Open" && t.entryDateTime && <span className="cell-age" title={`Open since ${fmtDateTime(t.entryDateTime)}`}>{durationLabel(t.entryDateTime, now)}</span>}
+                </>
+              ))}
               <td className="row-actions" onClick={(e) => e.stopPropagation()}>
                 <button className="btn btn-ghost row-edit-btn" aria-label={`Edit ${t.id}`} onClick={() => onEdit(t)}><Pencil size={12} /> Edit</button>
                 <button className="icon-btn" title="Copy trade" aria-label={`Copy ${t.id}`} onClick={() => onCopy(t)}><Copy size={13} /></button>
@@ -2428,6 +2600,29 @@ export function TradesTable({ trades, onView, onEdit, onDelete, onCopy, onBulkDe
             </tr>
           ))}
         </tbody>
+        {/* What the filtered set is actually worth. The table is handed the
+            *filtered* trades, so this totals exactly what the user narrowed to —
+            the one number a "show me my ICT longs this month" filter is for. It
+            spans the leading columns and then lines up under P&L, P&L % and the
+            RR pair, so each figure sits beneath the column it totals. */}
+        <tfoot className="trades-total">
+          <tr>
+            <td colSpan={leadingCols}>
+              <span className="trades-total-label">
+                {trades.length} trade{trades.length === 1 ? "" : "s"} shown
+                {totals.count > 0 && <> · {totals.count} closed · {totals.winRate !== null ? fmtPercent(totals.winRate, 1) : "—"} win rate</>}
+                {openShown > 0 && <> · {openShown} open</>}
+              </span>
+            </td>
+            <td><PnlText value={totals.count ? totals.net : null} /></td>
+            {show("pnlPercent") && <td><PnlText value={totals.avgPnlPercent} percent /></td>}
+            {show("expectedRR") && <td className="mono muted">{avgExpectedRR !== null ? `${fmtNum(avgExpectedRR)}R` : "—"}</td>}
+            {show("actualRR") && <td className="mono muted">{totals.avgRR !== null ? `${fmtNum(totals.avgRR)}R` : "—"}</td>}
+            {show("grade") && <td />}
+            {show("status") && <td />}
+            <td />
+          </tr>
+        </tfoot>
       </table>
       {sorted.length > pageSize && (
         <div className="pager">
@@ -2548,25 +2743,54 @@ function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences 
     const intensity = Math.min(1, Math.abs(pnl) / max);
     return pnl >= 0 ? `rgba(34,197,94,${0.12 + intensity * 0.35})` : `rgba(240,69,91,${0.12 + intensity * 0.35})`;
   };
+  // How the period's days split — best, worst, green/red count. Days are the
+  // unit risk is managed in, so this says something the per-trade win rate above
+  // it doesn't.
+  const days = useMemo(() => dayBreakdown(byDay), [byDay]);
   // Same day key the daily view's own "Today" label uses, computed once per
   // render rather than per cell — every cell in the weekly/monthly grid shares
   // this one comparison.
   const todayKey = isoDate(zonedNow(tz));
-  // One day cell, shared by the weekly and monthly grids.
+  const atToday = isoDate(cursor) === todayKey;
+  const goToday = () => setCursor(zonedNow(tz));
+  // One day cell, shared by the weekly and monthly grids. A day with trades
+  // opens them; a day without opens its note instead of being a button that
+  // does nothing — the cell always does the one useful thing it can.
   const dayCell = (key: string, label: ReactNode, i: number) => {
     const info = byDay[key];
     const isToday = key === todayKey;
+    const note = dayNotes[key];
+    const act = () => (info ? onSelectDay(key) : setNoteDate(key));
     return (
       <div
-        key={i} className={`calendar-cell ${isToday ? "calendar-cell-today" : ""}`} style={{ background: info ? heatBg(info.pnl, maxAbs) : "transparent" }} role="button" tabIndex={0}
-        onClick={() => info && onSelectDay(key)}
-        onKeyDown={(e) => { if (info && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onSelectDay(key); } }}
+        key={i} className={`calendar-cell ${isToday ? "calendar-cell-today" : ""}`} style={{ background: info ? heatBg(info.pnl, maxAbs) : "transparent" }}
+        role="button" tabIndex={0}
+        aria-label={`${key}${isToday ? " (today)" : ""} — ${info ? `${fmtCurrency(info.pnl)} over ${info.count} trade${info.count > 1 ? "s" : ""}` : "no trades"}${note ? ", has a note" : ""}`}
+        title={info ? "View this day's trades" : "Add a note for this day"}
+        onClick={act}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); act(); } }}
       >
         <button type="button" className="daynote-btn" title="Day note" aria-label={`Journal note for ${key}`} onClick={(e) => { e.stopPropagation(); setNoteDate(key); }}><Pencil size={10} /></button>
-        {dayNotes[key] && <span className="daynote-dot" title="Has a note" />}
+        {note && <span className="daynote-dot" title="Has a note" />}
         <span className="calendar-daynum">{label}</span>
         {info && <span className="mono calendar-pnl" style={{ color: info.pnl >= 0 ? "var(--profit)" : "var(--loss)" }}>{fmtCurrency(info.pnl)}</span>}
         {info && <span className="calendar-count">{info.count} trade{info.count > 1 ? "s" : ""}</span>}
+      </div>
+    );
+  };
+  /* A week's own line in the monthly grid — the row total a trader reads before
+     the individual days. Built from the same byDay map, so it can't drift from
+     the cells beside it; days outside the month in view are simply absent from
+     that map and contribute nothing. */
+  const weekSummary = (keys: string[], i: number) => {
+    const live = keys.map((k) => byDay[k]).filter(Boolean);
+    const pnl = live.reduce((s, d) => s + d.pnl, 0);
+    const count = live.reduce((s, d) => s + d.count, 0);
+    return (
+      <div key={`w${i}`} className={`calendar-week-cell ${live.length ? "" : "calendar-week-empty"}`}>
+        <span className="calendar-week-label">Week {i + 1}</span>
+        {live.length > 0 && <span className="mono calendar-pnl" style={{ color: pnl >= 0 ? "var(--profit)" : "var(--loss)" }}>{fmtCurrency(pnl)}</span>}
+        {live.length > 0 && <span className="calendar-count">{count} trade{count > 1 ? "s" : ""} · {live.length}d</span>}
       </div>
     );
   };
@@ -2589,10 +2813,20 @@ function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences 
           </div>
         )}
         <div className="cards-grid" style={{ marginTop: 12 }}>
-          <Card label="View P&L" value={<PnlText value={scopedStats.net} />} icon={TrendingUp} />
+          <Card label="View P&L" value={<PnlText value={scopedStats.net} />} icon={TrendingUp} sub={days.tradedDays ? `${fmtSignedCurrency(days.avgDay)} per trading day` : "No trading days yet"} />
           <Card label="View Trades" value={scopedTrades.length} icon={ListChecks} sub={`${scopedStats.count} closed`} />
-          <Card label="View Win Rate" value={scopedStats.winRate !== null ? fmtPercent(scopedStats.winRate, 1) : "—"} icon={Target} />
+          <Card label="View Win Rate" value={scopedStats.winRate !== null ? fmtPercent(scopedStats.winRate, 1) : "—"} icon={Target} sub={days.tradedDays ? `${days.green} green · ${days.red} red day${days.red === 1 ? "" : "s"}` : undefined} />
           <Card label="View Avg RR" value={scopedStats.avgRR !== null ? `${fmtNum(scopedStats.avgRR)}R` : "—"} icon={Percent} />
+          {/* Best and worst day, not best and worst trade: a single day is what a
+              daily-loss-limit rule is written against. Clickable — the number is
+              only useful next to the trades that made it. */}
+          {([["Best Day", days.best, Award, "var(--profit)"], ["Worst Day", days.worst, AlertTriangle, "var(--loss)"]] as const).map(([label, day, icon, colour]) => (
+            <Card
+              key={label} label={label} icon={icon} accentColor={colour}
+              value={day ? <button type="button" className="calendar-daylink" onClick={() => onSelectDay(day.key)}><PnlText value={day.pnl} /></button> : "—"}
+              sub={day ? `${fmtDate(parseLocalInputValue(day.key))} · ${day.count} trade${day.count > 1 ? "s" : ""}` : "No closed trades in view"}
+            />
+          ))}
         </div>
       </div>
       <div className="calendar-card">
@@ -2601,9 +2835,17 @@ function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences 
             ? <span />
             : <button className="icon-btn" aria-label="Previous period" onClick={() => step(-1)}><ChevronLeft size={16} /></button>}
           <h4>{periodTitle()}</h4>
-          {calendarView === "custom"
-            ? <span />
-            : <button className="icon-btn" aria-label="Next period" onClick={() => step(1)}><ChevronRight size={16} /></button>}
+          <div className="calendar-nav-right">
+            {/* Six months back with no way home is the calendar's oldest
+                annoyance. Disabled rather than hidden when the cursor is already
+                on today, so the control doesn't move around. */}
+            {calendarView !== "custom" && (
+              <button className="btn btn-ghost" onClick={goToday} disabled={atToday} title={atToday ? "Already on today" : "Jump back to today"}>Today</button>
+            )}
+            {calendarView === "custom"
+              ? <span />
+              : <button className="icon-btn" aria-label="Next period" onClick={() => step(1)}><ChevronRight size={16} /></button>}
+          </div>
         </div>
 
         {calendarView === "daily" && (() => {
@@ -2643,11 +2885,28 @@ function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences 
 
         {(calendarView === "monthly" || calendarView === "custom") && (
           <>
-            <div className="calendar-grid calendar-dow">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => <div key={d} className="calendar-dow-cell">{d}</div>)}</div>
-            <div className="calendar-grid">
-              {cells.map((d, i) => d === null
-                ? <div key={i} className="calendar-cell calendar-cell-empty" />
-                : dayCell(isoDate(new Date(year, month, d)) || "", d, i))}
+            <div className="calendar-grid calendar-grid-weeks calendar-dow">
+              {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => <div key={d} className="calendar-dow-cell">{d}</div>)}
+              <div className="calendar-dow-cell">Week</div>
+            </div>
+            {/* Seven days then that week's own total — the row a trader reads
+                first. Padded to whole weeks so every row has its summary. */}
+            <div className="calendar-grid calendar-grid-weeks">
+              {Array.from({ length: Math.ceil(cells.length / 7) }, (_, w) => {
+                const row = cells.slice(w * 7, w * 7 + 7);
+                const keys = row.filter((d): d is number => d !== null).map((d) => isoDate(new Date(year, month, d)) || "");
+                return (
+                  <Fragment key={`row-${w}`}>
+                    {Array.from({ length: 7 }, (_, c) => {
+                      const d = row[c];
+                      return d === undefined || d === null
+                        ? <div key={`${w}-${c}`} className="calendar-cell calendar-cell-empty" />
+                        : dayCell(isoDate(new Date(year, month, d)) || "", d, w * 7 + c);
+                    })}
+                    {weekSummary(keys, w)}
+                  </Fragment>
+                );
+              })}
             </div>
           </>
         )}
@@ -2657,14 +2916,38 @@ function PerformanceCalendar({ trades, onSelectDay, preferences, setPreferences 
             {Array.from({ length: 12 }, (_, m) => {
               const key = `${year}-${String(m + 1).padStart(2, "0")}`;
               const info = byMonth[key];
+              // Drilling down is the obvious next move from a month worth a
+              // second look, so the cell does it: switch to the monthly grid,
+              // cursor on that month.
+              const open = () => { setCursor(new Date(year, m, 1)); setCalendarView("monthly"); };
               return (
-                <div key={m} className="calendar-cell calendar-cell-month" style={{ background: info ? heatBg(info.pnl, maxMonthAbs) : "transparent" }}>
+                <div
+                  key={m} className="calendar-cell calendar-cell-month" style={{ background: info ? heatBg(info.pnl, maxMonthAbs) : "transparent" }}
+                  role="button" tabIndex={0} title="Open this month" onClick={open}
+                  aria-label={`${new Date(year, m, 1).toLocaleDateString(undefined, { month: "long" })} ${year} — ${info ? `${fmtCurrency(info.pnl)} over ${info.count} trade${info.count > 1 ? "s" : ""}` : "no trades"}`}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}
+                >
                   <span className="calendar-daynum">{new Date(year, m, 1).toLocaleDateString(undefined, { month: "short" })}</span>
                   {info && <span className="mono calendar-pnl" style={{ color: info.pnl >= 0 ? "var(--profit)" : "var(--loss)" }}>{fmtCurrency(info.pnl)}</span>}
                   {info && <span className="calendar-count">{info.count} trade{info.count > 1 ? "s" : ""}</span>}
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {/* What the shading means, and what the darkest cell is worth — without
+            it the heat map is decoration. */}
+        {calendarView !== "daily" && (
+          <div className="calendar-legend">
+            <span className="calendar-legend-label">{fmtCurrency(-(calendarView === "yearly" ? maxMonthAbs : maxAbs))}</span>
+            <span className="calendar-legend-scale" aria-hidden="true">
+              {[-1, -0.6, -0.25, 0, 0.25, 0.6, 1].map((f) => (
+                <span key={f} style={{ background: f === 0 ? "var(--bg-700)" : heatBg(f, 1) }} />
+              ))}
+            </span>
+            <span className="calendar-legend-label">{fmtCurrency(calendarView === "yearly" ? maxMonthAbs : maxAbs)}</span>
+            <span className="hint calendar-legend-note">Shading is P&amp;L against the biggest {calendarView === "yearly" ? "month" : "day"} in view · a day with no trades opens its note</span>
           </div>
         )}
       </div>
@@ -2911,42 +3194,113 @@ export function JournalPanel(props: Omit<Parameters<typeof JournalSection>[0], "
 ============================================================================ */
 // Exported for the component smoke tests (App.test.jsx) — App itself is still
 // the only intended consumer.
+const PLAYBOOK_SORTS = [
+  { id: "list", label: "List order" },
+  { id: "trades", label: "Most traded" },
+  { id: "net", label: "Best P&L" },
+  { id: "winrate", label: "Best win rate" },
+] as const;
 export function PlaybookPanel({ settings, setSettings, strategies, setStrategies, trades = [] }: {
   settings: Settings; setSettings: Dispatch<SetStateAction<Settings>>; strategies: string[]; setStrategies: Dispatch<SetStateAction<string[]>>; trades?: ComputedTrade[];
 }) {
   const [showStrategyMgr, setShowStrategyMgr] = useState(false);
-  const countByStrategy = useMemo(() => {
-    const m: Record<string, number> = {};
-    trades.forEach((t) => { if (t.strategy) m[t.strategy] = (m[t.strategy] || 0) + 1; });
-    return m;
-  }, [trades]);
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<string>("list");
+  // One row per strategy, stats and all — the note is a plan, and the row above
+  // it is what the plan actually produced.
+  const rows = useMemo(() => strategyPerformance(trades, strategies), [trades, strategies]);
+  const sorted = useMemo(() => {
+    const list = [...rows];
+    // A strategy with no closed trades has no win rate and no P&L to rank on;
+    // it sorts last rather than tying with a genuine zero.
+    if (sort === "trades") list.sort((a, b) => b.total - a.total);
+    else if (sort === "net") list.sort((a, b) => (b.stats.count ? b.stats.net : -Infinity) - (a.stats.count ? a.stats.net : -Infinity));
+    else if (sort === "winrate") list.sort((a, b) => (b.stats.winRate ?? -1) - (a.stats.winRate ?? -1));
+    return list;
+  }, [rows, sort]);
+  // Search covers the note as well as the name: "liquidity" should find the
+  // strategy whose playbook mentions it, not just one called that.
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return sorted;
+    return sorted.filter((r) => r.strategy.toLowerCase().includes(q) || (settings.strategyNotes?.[r.strategy] || "").toLowerCase().includes(q));
+  }, [sorted, search, settings.strategyNotes]);
+  const documented = rows.filter((r) => (settings.strategyNotes?.[r.strategy] || "").trim()).length;
+
   return (
     <div className="stack">
-      <Panel title="Strategy Playbook" right={<button className="btn btn-ghost" onClick={() => setShowStrategyMgr(true)}><SettingsIcon size={13} /> Manage</button>}>
+      <Panel
+        title="Strategy Playbook"
+        right={
+          <div className="journal-toolbar">
+            <Badge tone={documented === rows.length && rows.length > 0 ? "profit" : "neutral"}>{documented}/{rows.length} documented</Badge>
+            <button className="btn btn-ghost" onClick={() => setShowStrategyMgr(true)}><SettingsIcon size={13} /> Manage</button>
+          </div>
+        }
+      >
         <p className="hint" style={{ marginBottom: 12 }}>
-          Describe each strategy — the setup, entry trigger, invalidation, management rules. Notes live in the journal and ride along in backups. A note keeps its text if its strategy is renamed away and back, or removed and re-added.
+          Describe each strategy — the setup, entry trigger, invalidation, management rules — and read it next to what the strategy actually returned. Notes live in the journal and ride along in backups. A note keeps its text if its strategy is renamed away and back, or removed and re-added.
         </p>
         {strategies.length === 0 ? (
           <div className="hint">No strategies yet — add one with Manage.</div>
         ) : (
-          <div className="stack" style={{ gap: 10 }}>
-            {/* The trade count sits OUTSIDE the Field <label> — labels take
-                their accessible name from their whole text content, and a
-                count inside would rename every textarea to "ICT 3 trades…". */}
-            {strategies.map((s) => (
-              <div key={s}>
-                <Field label={s}>
-                  <textarea
-                    className="input textarea" rows={3} maxLength={5000}
-                    placeholder="Setup, entry trigger, invalidation, sizing, management…"
-                    value={settings.strategyNotes?.[s] || ""}
-                    onChange={(e) => setSettings((st) => ({ ...st, strategyNotes: { ...st.strategyNotes, [s]: e.target.value } }))}
-                  />
-                </Field>
-                <span className="hint mono playbook-count">{countByStrategy[s] || 0} trade{(countByStrategy[s] || 0) === 1 ? "" : "s"} logged with this strategy</span>
+          <>
+            <div className="playbook-toolbar">
+              <div className="search-box">
+                <Search size={14} />
+                <input placeholder="Search a strategy or its note…" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search strategies" />
               </div>
-            ))}
-          </div>
+              <div className="segmented segmented-tight">
+                {PLAYBOOK_SORTS.map((s) => (
+                  <button key={s.id} type="button" className={`seg-btn ${sort === s.id ? "seg-active-plain" : ""}`} onClick={() => setSort(s.id)}>{s.label}</button>
+                ))}
+              </div>
+            </div>
+            {visible.length === 0 ? (
+              <div className="hint" style={{ marginTop: 12 }}>No strategy matches "{search}".</div>
+            ) : (
+              <div className="stack" style={{ gap: 12, marginTop: 12 }}>
+                {visible.map((row) => {
+                  const { strategy: s, stats } = row;
+                  return (
+                    <div className="playbook-card" key={s}>
+                      {/* The name labels the textarea through aria-label rather than
+                          a Field <label>: a label takes its accessible name from its
+                          whole text content, so wrapping this stats row would rename
+                          every textarea to "ICT 3 trades win rate…". */}
+                      <div className="playbook-stats">
+                        <span className="playbook-name">{s}</span>
+                        <span className="playbook-stat"><b className="mono">{row.total}</b> trade{row.total === 1 ? "" : "s"}{row.open ? <span className="hint"> · {row.open} open</span> : null}</span>
+                        <span className="playbook-stat">Win rate <b className="mono">{stats.winRate !== null ? fmtPercent(stats.winRate, 1) : "—"}</b></span>
+                        <span className="playbook-stat">Net <PnlText value={stats.count ? stats.net : null} /></span>
+                        <span className="playbook-stat">Avg RR <b className="mono">{stats.avgRR !== null ? `${fmtNum(stats.avgRR)}R` : "—"}</b></span>
+                        <span className="playbook-stat">PF <b className="mono">{fmtProfitFactor(stats.profitFactor)}</b></span>
+                      </div>
+                      {/* Win/loss split at a glance: the bar is the only place in
+                          this panel where green/red is P&L-derived, which is what
+                          the colour rule reserves them for. */}
+                      {stats.count > 0 && (
+                        <div className="playbook-bar" role="img" aria-label={`${stats.wins} wins, ${stats.losses} losses of ${stats.count} closed trades`}>
+                          <span className="playbook-bar-win" style={{ width: `${(stats.wins / stats.count) * 100}%` }} />
+                          <span className="playbook-bar-loss" style={{ width: `${(stats.losses / stats.count) * 100}%` }} />
+                        </div>
+                      )}
+                      <textarea
+                        className="input textarea" rows={3} maxLength={5000} aria-label={s}
+                        placeholder="Setup, entry trigger, invalidation, sizing, management…"
+                        value={settings.strategyNotes?.[s] || ""}
+                        onChange={(e) => setSettings((st) => ({ ...st, strategyNotes: { ...st.strategyNotes, [s]: e.target.value } }))}
+                      />
+                      {/* The count lives in the stats row above; this line adds
+                          the one thing that row can't show — how stale the
+                          record behind the note is. */}
+                      {row.lastExit && <span className="hint mono playbook-count">Last closed {fmtDate(row.lastExit)}</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
         )}
       </Panel>
       {showStrategyMgr && <StrategyManager strategies={strategies} setStrategies={setStrategies} onClose={() => setShowStrategyMgr(false)} />}
@@ -3546,7 +3900,7 @@ function MiniStatBlock({ title, stats, tone }: { title: string; stats: SummarySt
 }
 
 /* ============================================================================
-   REPORTS PANEL — Excel + Word export
+   REPORTS PANEL — Excel + CSV + PDF + Word + interactive HTML export
 ============================================================================ */
 function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onToast, scopeLabel = "" }: {
   allTrades: ComputedTrade[]; filteredTrades: ComputedTrade[]; filtersActive: boolean; settings: Settings;
@@ -3555,7 +3909,7 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
   const [includeShots, setIncludeShots] = useState(false);
   const [scope, setScope] = useState("all");
   // Which export is mid-flight, so only that button shows a spinner: one of
-  // "excel" | "csv" | "word" | "pdf" | "".
+  // "excel" | "csv" | "word" | "pdf" | "html" | "".
   const [busy, setBusy] = useState("");
 
   // Reports carry the journal's own name when one is set (Settings > About).
@@ -3659,6 +4013,11 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
     return map;
   };
 
+  // The series every exported report charts, off the same numbers its tables
+  // use. Recharts can't help here — a file on disk has no React tree — so the
+  // markup comes from lib/report / lib/reportchart as plain strings.
+  const chartData = useMemo(() => reportChartData(trades, points, overall), [trades, points, overall]);
+
   // Shared report markup for both the Word (.doc) and PDF exports. Every free-text
   // trade field is escaped — a symbol or screenshot label containing "<" or "&"
   // would otherwise corrupt the document or inject markup. forWord adds the Office
@@ -3680,7 +4039,8 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
     return `
       <html${nsAttrs}>
       <head><meta charset="utf-8"><title>${escapeHtml(reportName)} — Report</title>
-      <style>${pageCss}body{font-family:Calibri,Arial,sans-serif;color:#1a1a1a;} h1{color:#161A22;margin-bottom:0;} h2{border-bottom:2px solid #3E8FFF;padding-bottom:4px;} table{border-collapse:collapse;width:100%;margin:10px 0;} td,th{border:1px solid #ccc;padding:6px 8px;font-size:11px;text-align:left;} th{background:#161A22;color:#fff;} .summary-grid td{font-size:12px;} img{max-width:100%;}</style></head>
+      <style>${pageCss}body{font-family:Calibri,Arial,sans-serif;color:#1a1a1a;} h1{color:#161A22;margin-bottom:0;} h2{border-bottom:2px solid #3E8FFF;padding-bottom:4px;} h3{font-size:12px;color:#4A5262;margin:14px 0 6px;} table{border-collapse:collapse;width:100%;margin:10px 0;} td,th{border:1px solid #ccc;padding:6px 8px;font-size:11px;text-align:left;} th{background:#161A22;color:#fff;} .summary-grid td{font-size:12px;} img{max-width:100%;}
+      ${REPORT_CHART_CSS}</style></head>
       <body>
         <h1>${escapeHtml(reportName)}</h1><p style="color:#888;margin-top:2px">Trading Performance Report${scopeLabel ? ` · ${escapeHtml(scopeLabel)}` : ""} · ${useFiltered ? "Filtered selection" : "All trades"} · Generated ${fmtDateTime(zonedNow(settings.timezone))}</p>
         <h2>Summary</h2>
@@ -3690,6 +4050,8 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
           <tr><td><b>Win Rate</b></td><td>${overall.winRate !== null ? fmtPercent(overall.winRate, 1) : "—"}</td><td><b>Average RR</b></td><td>${overall.avgRR !== null ? fmtNum(overall.avgRR) + "R" : "—"}</td></tr>
           <tr><td><b>Profit Factor</b></td><td>${overall.profitFactor !== null ? (Number.isFinite(overall.profitFactor) ? fmtNum(overall.profitFactor) : "∞") : "—"}</td><td><b>Max Drawdown</b></td><td>${fmtCurrency(maxDD)} (${fmtNum(maxDDPct, 1)}%)</td></tr>
         </table>
+        <h2>Charts</h2>
+        ${reportChartsHtml(chartData, overall, { forWord, startingBalance: settings.startingBalance })}
         <h2>Trade Statistics</h2>
         <table><tr><th>Segment</th><th>Trades</th><th>Win Rate</th><th>Net P&amp;L</th><th>Avg RR</th><th>Profit Factor</th></tr>
           ${["Long", "Short"].map((dir) => { const s = summarize(trades.filter((t) => t.direction === dir)); return `<tr><td>${dir}</td><td>${s.count}</td><td>${s.winRate !== null ? fmtPercent(s.winRate, 1) : "—"}</td><td>${fmtCurrency(s.net)}</td><td>${s.avgRR !== null ? fmtNum(s.avgRR) + "R" : "—"}</td><td>${s.profitFactor !== null ? (Number.isFinite(s.profitFactor) ? fmtNum(s.profitFactor) : "∞") : "—"}</td></tr>`; }).join("")}
@@ -3698,6 +4060,30 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
         <table><tr><th>ID</th><th>Symbol</th><th>Market</th><th>Dir</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>RR</th><th>Grade</th></tr>${rows}</table>
         ${includeShots ? `<h2>Screenshots</h2>${shotsHtml}` : ""}
       </body></html>`;
+  };
+
+  /* The interactive report: one self-contained .html file that opens in any
+     browser with the charts drawn and the trade table live (search, filter,
+     sortable headers, a count strip that re-totals what is showing). The whole
+     document is built by interactiveReportHtml in lib/report — it is a string,
+     with no React in it, so it belongs there and is tested there. */
+  const exportInteractive = async () => {
+    setBusy("html");
+    try {
+      const html = interactiveReportHtml({
+        reportName, scopeLabel, scopeNote: useFiltered ? "Filtered selection" : "All trades",
+        generatedAt: fmtDateTime(zonedNow(settings.timezone)),
+        trades, startingBalance: settings.startingBalance, overall, points, maxDD, maxDDPct,
+        includeShots, shotsByTrade: await gatherShots(),
+      });
+      const res = await saveTextExport(`TradeJournal_Report_${fileStamp}.html`, html, "text/html;charset=utf-8");
+      notify(res, "Interactive report");
+    } catch (e) {
+      console.error("Interactive report export failed", e);
+      onToast?.({ message: "Interactive report export failed", tone: "loss" });
+    } finally {
+      setBusy("");
+    }
   };
 
   const exportWord = async () => {
@@ -3756,6 +4142,13 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
       <Panel title="Export Reports">
         <div className="reports-grid">
           <div className="report-card">
+            <BarChart3 size={22} style={{ color: "var(--accent)" }} />
+            <h5>Interactive Report (.html)</h5>
+            <p>One self-contained page: equity curve, monthly and per-strategy P&amp;L, win/loss split — plus a trade table you can search, filter and sort. Opens in any browser, works offline.</p>
+            <label className="checkbox-row"><input type="checkbox" checked={includeShots} onChange={(e) => setIncludeShots(e.target.checked)} /> Include screenshots (larger file)</label>
+            <button className="btn btn-primary" onClick={exportInteractive} disabled={!!busy}>{busyIcon("html")} {busy === "html" ? "Preparing…" : "Export Interactive"}</button>
+          </div>
+          <div className="report-card">
             <FileSpreadsheet size={22} style={{ color: "var(--profit)" }} />
             <h5>Excel Workbook (.xlsx)</h5>
             <p>Trade history, dashboard summary, long/short/combined statistics and the equity curve — each on its own sheet.</p>
@@ -3790,6 +4183,168 @@ function ReportsPanel({ allTrades, filteredTrades, filtersActive, settings, onTo
 /* ============================================================================
    SETTINGS PANEL
 ============================================================================ */
+/* Journal-timezone combobox. The runtime hands over ~400 IANA zones; a native
+   <select> of that length is unusable without search, so this is the same list
+   behind a type-ahead: ascending by GMT offset, one sticky heading per distinct
+   offset (the :00/:30 ladder, plus the handful of real :45 zones), search over
+   the zone id and the offset in any of "gmt+5:30" / "+5:30" / "5:30" / "05:30".
+   Shaping and matching are pure — timezoneOptions / filterTimezoneOptions /
+   groupTimezoneOptions in lib/trade — so this component only does the widget.
+   Exported for the component smoke tests (App.test.jsx). */
+export function TimezonePicker({ value, onChange, options, systemTz }: {
+  value: string; onChange: (tz: string) => void; options: TimezoneOption[]; systemTz: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Where the popover sits, in viewport coordinates. It has to be `fixed`: the
+  // picker lives inside .content-scroll, and an absolutely-positioned popover
+  // there is clipped by that scrolling pane — a list opened near the bottom of
+  // Settings was cut off mid-option with no way to see the rest.
+  const [pos, setPos] = useState<{ left: number; width: number; top?: number; bottom?: number; maxH: number } | null>(null);
+
+  // The machine's own zone, shaped like every other option so it can be
+  // searched and rendered by the same code. `id: ""` is what settings store for
+  // "follow the machine".
+  const systemOption = useMemo<TimezoneOption>(() => {
+    const [o] = timezoneOptions([systemTz]);
+    return {
+      id: "", mins: o?.mins ?? 0, offset: o?.offset ?? "", label: o?.label ?? "", region: "",
+      city: `System — ${systemTz}`, search: `system ${systemTz} ${o?.offset ?? ""} gmt`.toLowerCase().replace(/_/g, " "),
+    };
+  }, [systemTz]);
+
+  const filtered = useMemo(() => filterTimezoneOptions(options, query), [options, query]);
+  const groups = useMemo(() => groupTimezoneOptions(filtered), [filtered]);
+  const systemMatches = filterTimezoneOptions([systemOption], query).length > 0;
+  // Flat order for the keyboard cursor: System first (it is the reset), then the
+  // zones in the order the groups render them.
+  const flat = useMemo(() => (systemMatches ? [systemOption, ...filtered] : filtered), [systemMatches, systemOption, filtered]);
+  const indexOfId = (id: string) => flat.findIndex((o) => o.id === id);
+
+  const current = value ? options.find((o) => o.id === value) : systemOption;
+  // A zone restored from another machine can be absent from this runtime's list;
+  // show it as-is instead of silently reading as System.
+  const triggerCity = current ? current.city : value;
+  const triggerRegion = current?.region || "";
+
+  /* Measure the trigger and place the popover against the viewport: below it
+     when there is room, flipped above when there isn't, and never taller than
+     the space it has. Re-measured on scroll and resize (capture phase, so the
+     inner .content-scroll counts too) rather than closing — a list that
+     vanishes because the page moved a pixel is worse than one that follows. */
+  const place = useCallback(() => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const gap = 4, margin = 10, want = 340;
+    const below = window.innerHeight - r.bottom - margin;
+    const above = r.top - margin;
+    const flip = below < Math.min(want, 220) && above > below;
+    const width = Math.max(r.width, 300);
+    setPos({
+      left: Math.max(margin, Math.min(r.left, window.innerWidth - width - margin)),
+      width,
+      top: flip ? undefined : r.bottom + gap,
+      bottom: flip ? window.innerHeight - r.top + gap : undefined,
+      maxH: Math.max(180, Math.min(want, flip ? above : below)),
+    });
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    setQuery(""); setActive(Math.max(0, indexOfId(value))); inputRef.current?.focus();
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setActive(0); }, [query]);
+  // Keep the cursor visible as it moves, and only within this list. Feature-
+  // detected: jsdom (and any runtime without scrollIntoView) still renders the
+  // list fine, it just doesn't follow the cursor.
+  useEffect(() => {
+    if (!open) return;
+    const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${active}"]`);
+    el?.scrollIntoView?.({ block: "nearest" });
+  }, [active, open]);
+  // Click anywhere else closes. mousedown, not click, so it fires before a
+  // control underneath takes focus.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: globalThis.MouseEvent) => { if (!wrapRef.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  const pick = (id: string) => { onChange(id); setOpen(false); };
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") { e.stopPropagation(); setOpen(false); return; }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!flat.length) return;
+      setActive((i) => (e.key === "ArrowDown" ? Math.min(flat.length - 1, i + 1) : Math.max(0, i - 1)));
+    } else if (e.key === "Home") { e.preventDefault(); setActive(0); }
+    else if (e.key === "End") { e.preventDefault(); setActive(Math.max(0, flat.length - 1)); }
+    else if (e.key === "Enter") { e.preventDefault(); if (flat[active]) pick(flat[active].id); }
+  };
+  // Group headings interrupt the flat order, so each option carries the index it
+  // holds in `flat` — that is what the cursor and aria-activedescendant use.
+  const flatIndexOf = (opt: TimezoneOption) => flat.indexOf(opt);
+  const optionRow = (opt: TimezoneOption) => {
+    const idx = flatIndexOf(opt);
+    return (
+      <button
+        type="button" key={opt.id || "__system"} id={`tz-opt-${idx}`} data-idx={idx} role="option"
+        aria-selected={opt.id === value}
+        className={`tz-opt ${idx === active ? "tz-opt-active" : ""} ${opt.id === value ? "tz-opt-selected" : ""}`}
+        onMouseEnter={() => setActive(idx)} onClick={() => pick(opt.id)}
+      >
+        <span className="tz-opt-city">{opt.city}</span>
+        {opt.region && <span className="tz-opt-region">{opt.region}</span>}
+        <span className="tz-trigger-off">{opt.label}</span>
+      </button>
+    );
+  };
+
+  return (
+    <div className="tz-picker" ref={wrapRef} onKeyDown={onKeyDown}>
+      <button
+        ref={triggerRef} type="button" className="input tz-trigger" onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox" aria-expanded={open} aria-label={`Journal timezone: ${triggerCity}`}
+      >
+        <span className="tz-trigger-label">{triggerCity}{triggerRegion ? ` · ${triggerRegion}` : ""}</span>
+        <span className="tz-trigger-off">{current?.label}</span>
+        <ChevronDown size={14} />
+      </button>
+      {open && (
+        <div className="tz-pop" style={pos ? { left: pos.left, width: pos.width, top: pos.top, bottom: pos.bottom } : undefined}>
+          <div className="tz-search-row">
+            <Search size={13} />
+            <input
+              ref={inputRef} className="tz-search" value={query} onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search city, region or GMT offset…" role="combobox" aria-expanded aria-controls="tz-listbox"
+              aria-activedescendant={flat[active] ? `tz-opt-${active}` : undefined} aria-label="Search timezones"
+            />
+          </div>
+          <div className="tz-list" ref={listRef} id="tz-listbox" role="listbox" aria-label="Timezones" style={pos ? { maxHeight: pos.maxH - 42 } : undefined}>
+            {systemMatches && optionRow(systemOption)}
+            {groups.map((g) => (
+              <div key={g.mins}>
+                <div className="tz-group">{g.label}</div>
+                {g.zones.map(optionRow)}
+              </div>
+            ))}
+            {!flat.length && <div className="tz-empty">No timezone matches "{query}".</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Exported for the component smoke tests (App.test.jsx) — App itself is still
 // the only intended consumer.
 interface SettingsPanelProps {
@@ -3800,20 +4355,14 @@ interface SettingsPanelProps {
   preferences: Preferences; setPreferences: Dispatch<SetStateAction<Preferences>>;
   users?: AuthUser[]; setUsers: Dispatch<SetStateAction<AuthUser[]>>;
   currentUser?: AuthUser | null; onAuthenticated: (user: AuthUser | null) => void;
+  allowSignup?: boolean; setAllowSignup?: (v: boolean) => void;
 }
-export function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, setTheme, strategies, onImportTrades, activeAccountId, setActiveAccountId, preferences, setPreferences, users = [], setUsers, currentUser, onAuthenticated }: SettingsPanelProps) {
+export function SettingsPanel({ settings, setSettings, trades, replaceAllData, theme, setTheme, strategies, onImportTrades, activeAccountId, setActiveAccountId, preferences, setPreferences, users = [], setUsers, currentUser, onAuthenticated, allowSignup = false, setAllowSignup }: SettingsPanelProps) {
   // ~400 zones × an Intl formatter each is a one-time cost taken when Settings
-  // mounts, not on every keystroke in the panel. Offsets are "now"-relative
-  // (DST), which is as precise as a picker label needs to be. Ordered by the
-  // offset itself (west to east), alphabetical within an offset — a trader
-  // hunting "somewhere at GMT+2" scans one contiguous block instead of the
-  // whole alphabet.
-  const tzOptions = useMemo(() => {
-    const now = new Date();
-    return TIMEZONE_CHOICES
-      .map((z) => ({ z, mins: tzOffsetMinutes(z, now), off: tzOffsetLabel(z, now) }))
-      .sort((a, b) => (a.mins - b.mins) || a.z.localeCompare(b.z));
-  }, []);
+  // mounts, not on every keystroke in the picker. Offsets are "now"-relative
+  // (DST), which is as precise as a picker label needs to be; the ordering and
+  // grouping are timezoneOptions' job (ascending offset, id as tiebreak).
+  const tzOptions = useMemo(() => timezoneOptions(TIMEZONE_CHOICES), []);
   const fileRef = useRef<HTMLInputElement>(null);
   const csvRef = useRef<HTMLInputElement>(null);
   const [msg, setMsg] = useState("");
@@ -3967,21 +4516,16 @@ export function SettingsPanel({ settings, setSettings, trades, replaceAllData, t
               onChange={(e) => setSettings((s) => ({ ...s, journalTagline: e.target.value }))}
             />
           </Field>
-          <Field label="Journal timezone">
-            <select
-              className="input" value={settings.timezone || ""}
-              onChange={(e) => setSettings((s) => ({ ...s, timezone: e.target.value }))}
-            >
-              <option value="">System — {SYSTEM_TZ} ({tzOffsetLabel(SYSTEM_TZ)})</option>
-              {/* A zone restored from another machine can be absent from this
-                  runtime's list; keep it selectable instead of silently
-                  snapping the select to System. */}
-              {settings.timezone && !TIMEZONE_CHOICES.includes(settings.timezone) && (
-                <option value={settings.timezone}>{settings.timezone}</option>
-              )}
-              {tzOptions.map(({ z, off }) => <option key={z} value={z}>{z} ({off})</option>)}
-            </select>
-          </Field>
+          {/* A <div>, not the Field <label>: the trigger is a button and the
+              search box lives inside the popover, so there is no single control
+              for a label to point at. */}
+          <div className="field">
+            <span className="field-label">Journal timezone</span>
+            <TimezonePicker
+              value={settings.timezone || ""} options={tzOptions} systemTz={SYSTEM_TZ}
+              onChange={(tz) => setSettings((s) => ({ ...s, timezone: tz }))}
+            />
+          </div>
         </div>
         <p className="hint" style={{ marginTop: 8 }}>
           "Today", the weekly and monthly ranges, the clock and the date picker's Now follow this zone — useful when you trade a session abroad. Trade times are saved exactly as you type them; changing the zone never shifts an existing trade.
@@ -4025,7 +4569,7 @@ export function SettingsPanel({ settings, setSettings, trades, replaceAllData, t
         </div>
       </Panel>
 
-      {setUsers && <SecurityPanel users={users} setUsers={setUsers} currentUser={currentUser} onAuthenticated={onAuthenticated} />}
+      {setUsers && <SecurityPanel users={users} setUsers={setUsers} currentUser={currentUser} onAuthenticated={onAuthenticated} allowSignup={allowSignup} setAllowSignup={setAllowSignup} />}
 
       <Panel title="Appearance">
         <div className="theme-grid">
@@ -4191,11 +4735,17 @@ function LiveClock({ format = "12h" }) {
 /* ============================================================================
    LOGIN GATE
    A soft, opt-in gate: it only appears once at least one user has been created
-   (Settings > Security). No self-signup here — a stranger must not be able to
-   register past the gate — so account creation lives inside the app, behind it.
-   Multi-user: any registered user can log in by name; verification is against
-   the stored PBKDF2 hash in ./lib/auth. Web-future: swap onLogin's local verify
-   for a network call and this screen is unchanged (see ARCHITECTURE.md § Auth).
+   (Settings > Security, or the first sign-up). Multi-user: any registered user
+   can log in by name; verification is against the stored PBKDF2 hash in
+   ./lib/auth. Web-future: swap the local verify for a network call and this
+   screen is unchanged (see ARCHITECTURE.md § Authentication).
+
+   Self-signup is OFF by default and gated on `allowSignup`, because a login
+   screen that lets anyone register past it protects nothing. With it off, the
+   Create-account tab still exists — it explains that an existing user has to
+   add the account from Settings > Security, which is the honest answer rather
+   than a hidden control. The owner turns it on for a shared machine where
+   everyone should have their own login.
 ============================================================================ */
 function PasswordInput({ value, onChange, placeholder, autoFocus, onEnter }: { value: string; onChange: (v: string) => void; placeholder?: string; autoFocus?: boolean; onEnter?: () => void }) {
   const [show, setShow] = useState(false);
@@ -4213,54 +4763,267 @@ function PasswordInput({ value, onChange, placeholder, autoFocus, onEnter }: { v
   );
 }
 // Exported for the component smoke tests (App.test.jsx).
-export function AuthGate({ users, journalName, onAuthenticated }: { users: AuthUser[]; journalName?: string; onAuthenticated: (user: AuthUser) => void }) {
+export function AuthGate({ users, journalName, onAuthenticated, onRegister, allowSignup = false }: {
+  users: AuthUser[]; journalName?: string; onAuthenticated: (user: AuthUser) => void;
+  onRegister?: (user: AuthUser) => void; allowSignup?: boolean;
+}) {
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [username, setUsername] = useState(users.length === 1 ? users[0].username : "");
   const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const signup = mode === "signup";
+  // With no accounts yet there is nothing to sign in to, so the first visit is
+  // a sign-up regardless of the policy flag — that is how the gate gets turned
+  // on in the first place.
+  const canSignup = allowSignup || users.length === 0;
+
+  /* Switching tabs resets the credentials rather than carrying them across. The
+     username especially: with a single account the sign-in field is prefilled
+     with that account's name, and leaving it there would have a new user typing
+     their name onto the end of someone else's. */
+  const switchMode = (next: "signin" | "signup") => {
+    setMode(next);
+    setError(""); setPassword(""); setConfirm("");
+    setUsername(next === "signup" ? "" : (users.length === 1 ? users[0].username : ""));
+  };
 
   const submit = async () => {
     setError("");
+    if (signup) {
+      if (!canSignup) return;
+      if (!username.trim()) { setError("Pick a username."); return; }
+      if (findUser(users, username)) { setError("That username is taken."); return; }
+      if (password.length < 4) { setError("Password must be at least 4 characters."); return; }
+      if (password !== confirm) { setError("Passwords don't match."); return; }
+      setBusy(true);
+      try {
+        const user = await makeUser(username, password, displayName);
+        onRegister?.(user);
+      } catch (e) { setError((e as Error)?.message || "Could not create the account."); }
+      finally { setBusy(false); }
+      return;
+    }
     const user = findUser(users, username);
     if (!user) { setError("No account with that username."); return; }
     setBusy(true);
     try {
       const ok = await verifyPassword(password, user.salt, user.hash);
-      if (ok) onAuthenticated(user);
+      if (ok) onAuthenticated({ ...user, lastLoginAt: new Date().toISOString() });
       else setError("Incorrect password.");
     } catch { setError("Could not verify — try again."); }
     finally { setBusy(false); }
   };
 
+  const ready = signup ? !!username && !!password && !!confirm : !!username && !!password;
+
   return (
     <div className="auth-gate">
       <div className="auth-card">
         <div className="auth-brand"><Lock size={20} /><span className="auth-brand-text">{journalName}</span></div>
-        <div className="auth-sub">Sign in to open your journal.</div>
-        <div className="stack" style={{ gap: 12 }}>
-          <Field label="Username">
-            <input className="input" value={username} autoFocus={users.length !== 1} placeholder="Your username" onChange={(e) => setUsername(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
-          </Field>
-          <Field label="Password">
-            <PasswordInput value={password} onChange={setPassword} placeholder="Your password" autoFocus={users.length === 1} onEnter={submit} />
-          </Field>
-          {error && <div className="auth-error">{error}</div>}
-          <button className="btn btn-primary" disabled={busy || !username || !password} onClick={submit} style={{ justifyContent: "center" }}>
-            {busy ? <Loader2 size={15} className="spin" /> : <LogIn size={15} />} Sign in
-          </button>
-          <div className="hint" style={{ fontSize: 11.5, lineHeight: 1.5 }}>
-            The gate protects the running app, not the files on disk. Forgot your password? Remove the login files from this app's storage folder to reset — your journal data is separate and stays intact.
-          </div>
+        <div className="auth-sub">{signup ? "Create an account for this journal." : "Sign in to open your journal."}</div>
+        {/* Real tabs, not two buttons that look like tabs: the submit button
+            below also reads "Sign in", and a screen reader (or a test) hunting
+            for a button by that name should find the one that submits. */}
+        <div className="segmented segmented-tight auth-tabs" role="tablist" aria-label="Sign in or create an account">
+          <button type="button" role="tab" aria-selected={!signup} aria-controls="auth-form" className={`seg-btn ${!signup ? "seg-active-plain" : ""}`} onClick={() => switchMode("signin")}><LogIn size={13} /> Sign in</button>
+          <button type="button" role="tab" aria-selected={signup} aria-controls="auth-form" className={`seg-btn ${signup ? "seg-active-plain" : ""}`} onClick={() => switchMode("signup")}><UserPlus size={13} /> Create account</button>
         </div>
+        {signup && !canSignup ? (
+          <div className="stack" id="auth-form" role="tabpanel" style={{ gap: 12 }}>
+            <div className="hint" style={{ lineHeight: 1.55 }}>
+              Self sign-up is switched off for this journal — which is what keeps the login gate worth having. Ask someone who can already sign in to add you from <b>Settings &gt; Security</b>, or to turn on "Allow sign-up from the login screen" there.
+            </div>
+            <button className="btn btn-ghost" onClick={() => switchMode("signin")} style={{ justifyContent: "center" }}>Back to sign in</button>
+          </div>
+        ) : (
+          <div className="stack" id="auth-form" role="tabpanel" style={{ gap: 12 }}>
+            <Field label="Username">
+              <input
+                className="input" value={username} autoFocus={signup || users.length !== 1} placeholder={signup ? "Pick a username" : "Your username"}
+                onChange={(e) => setUsername(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+              />
+            </Field>
+            {signup && (
+              <Field label="Display name (optional)">
+                <input className="input" maxLength={40} value={displayName} placeholder="Shown on your profile" onChange={(e) => setDisplayName(e.target.value)} />
+              </Field>
+            )}
+            <Field label="Password">
+              <PasswordInput value={password} onChange={setPassword} placeholder={signup ? "At least 4 characters" : "Your password"} autoFocus={!signup && users.length === 1} onEnter={signup ? undefined : submit} />
+            </Field>
+            {signup && (
+              <Field label="Confirm password">
+                <PasswordInput value={confirm} onChange={setConfirm} placeholder="Repeat password" onEnter={submit} />
+              </Field>
+            )}
+            {error && <div className="auth-error">{error}</div>}
+            <button className="btn btn-primary" disabled={busy || !ready} onClick={submit} style={{ justifyContent: "center" }}>
+              {busy ? <Loader2 size={15} className="spin" /> : signup ? <UserPlus size={15} /> : <LogIn size={15} />} {signup ? "Create account & sign in" : "Sign in"}
+            </button>
+            <div className="hint" style={{ fontSize: 11.5, lineHeight: 1.5 }}>
+              The gate protects the running app, not the files on disk. Forgot your password? Remove the login files from this app's storage folder to reset — your journal data is separate and stays intact.
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
+/* ============================================================================
+   PROFILE — the signed-in user's own page
+   Who is signed in, what to call them, and the two things only they should be
+   able to change: their display name/photo and their password. Deliberately
+   separate from Settings > Security, which is account *administration* (who may
+   sign in at all); this tab is about the person currently at the keyboard.
+
+   It renders only while signed in — with the gate off there is no user to be a
+   profile of, and the tab is hidden rather than shown empty.
+============================================================================ */
+export function ProfilePanel({ user, users = [], onUpdateUser, onSignOut, onToast, tradeCount = 0, journalName }: {
+  user: AuthUser; users?: AuthUser[]; onUpdateUser: (user: AuthUser) => void; onSignOut: () => void;
+  onToast?: (toast: { message: string; tone?: string }) => void; tradeCount?: number; journalName?: string;
+}) {
+  const [displayName, setDisplayName] = useState(user.displayName || "");
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [pwError, setPwError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const shown = displayNameOf(user);
+  const initials = shown.slice(0, 2).toUpperCase();
+  const nameDirty = (user.displayName || "") !== displayName.trim();
+
+  const saveName = () => {
+    onUpdateUser(updateProfile(user, { displayName }));
+    onToast?.({ message: "Profile updated", tone: "neutral" });
+  };
+  const onAvatar = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!["image/png", "image/jpeg", "image/jpg", "image/webp"].includes(file.type)) {
+      onToast?.({ message: "Pick a PNG, JPEG or WebP image", tone: "loss" });
+      return;
+    }
+    setAvatarBusy(true);
+    try {
+      // Downscaled before it is stored: this rides in the auth record, which is
+      // read on every launch.
+      const dataUrl = await compressImage(file, 256, 0.85);
+      onUpdateUser(updateProfile(user, { avatar: dataUrl }));
+      onToast?.({ message: "Profile photo updated", tone: "neutral" });
+    } catch { onToast?.({ message: "Could not read that image", tone: "loss" }); }
+    finally { setAvatarBusy(false); }
+  };
+  const changePw = async () => {
+    setPwError("");
+    if (next !== confirm) { setPwError("New passwords don't match."); return; }
+    setBusy(true);
+    try {
+      // The current password is verified inside changePassword — an unattended
+      // signed-in session must not be enough to take the account over.
+      onUpdateUser(await changePassword(user, current, next));
+      setCurrent(""); setNext(""); setConfirm("");
+      onToast?.({ message: "Password changed", tone: "profit" });
+    } catch (e) { setPwError((e as Error)?.message || "Could not change the password."); }
+    finally { setBusy(false); }
+  };
+
+  const since = user.createdAt ? fmtDate(user.createdAt) : "—";
+  const lastSeen = user.lastLoginAt ? fmtDateTime(user.lastLoginAt) : "This session";
+
+  return (
+    <div className="stack">
+      <Panel title="Profile">
+        <div className="profile-head">
+          <div className="profile-avatar" role="button" tabIndex={0} title="Change your photo"
+            onClick={() => fileRef.current?.click()}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileRef.current?.click(); } }}
+          >
+            {user.avatar ? <img src={user.avatar} alt="" /> : <span className="profile-initials">{initials}</span>}
+            <span className="profile-avatar-edit">{avatarBusy ? <Loader2 size={14} className="spin" /> : <ImageIcon size={14} />}</span>
+          </div>
+          <div className="profile-id">
+            <h3>{shown}</h3>
+            <span className="hint mono">@{user.username}</span>
+            <div className="profile-meta">
+              <span>Member since {since}</span>
+              <span>·</span>
+              <span>Last sign-in {lastSeen}</span>
+              <span>·</span>
+              <span>{tradeCount} trade{tradeCount === 1 ? "" : "s"} in {journalName || APP_NAME}</span>
+            </div>
+          </div>
+          <div className="profile-head-actions">
+            {user.avatar && <button className="btn btn-ghost" onClick={() => onUpdateUser(updateProfile(user, { avatar: "" }))}>Remove photo</button>}
+            <button className="btn btn-ghost" onClick={onSignOut}><LogOut size={13} /> Sign out</button>
+          </div>
+        </div>
+        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={onAvatar} />
+        <div className="form-grid" style={{ marginTop: 16 }}>
+          <Field label="Display name">
+            <input className="input" maxLength={40} value={displayName} placeholder={user.username} onChange={(e) => setDisplayName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && nameDirty) saveName(); }} />
+          </Field>
+          <Field label="Username">
+            {/* Not editable: it is the identity every stored record is keyed to,
+                and renaming it here would silently orphan the session. */}
+            <input className="input input-readonly" value={user.username} readOnly title="Your username is fixed — create another account to sign in under a different name" />
+          </Field>
+        </div>
+        <div style={{ marginTop: 12 }}>
+          <button className="btn btn-primary" disabled={!nameDirty} onClick={saveName}><Save size={14} /> Save profile</button>
+        </div>
+      </Panel>
+
+      <Panel title="Password">
+        <p className="hint" style={{ marginBottom: 12, lineHeight: 1.55 }}>
+          Your password is stored as a PBKDF2-SHA-256 hash with its own salt — never in the clear. Changing it takes effect immediately; other signed-in devices are unaffected because the session lives only in this app's memory.
+        </p>
+        <div className="form-grid">
+          <Field label="Current password"><PasswordInput value={current} onChange={setCurrent} placeholder="Your current password" /></Field>
+          <Field label="New password"><PasswordInput value={next} onChange={setNext} placeholder="At least 4 characters" /></Field>
+          <Field label="Confirm new password"><PasswordInput value={confirm} onChange={setConfirm} placeholder="Repeat new password" onEnter={changePw} /></Field>
+        </div>
+        {pwError && <div className="auth-error" style={{ marginTop: 8 }}>{pwError}</div>}
+        <div style={{ marginTop: 12 }}>
+          <button className="btn btn-primary" disabled={busy || !current || !next || !confirm} onClick={changePw}>
+            {busy ? <Loader2 size={14} className="spin" /> : <Lock size={14} />} Change password
+          </button>
+        </div>
+      </Panel>
+
+      {users.length > 1 && (
+        <Panel title="Who else can sign in" right={<Badge tone="neutral">{users.length} accounts</Badge>}>
+          <p className="hint" style={{ marginBottom: 12 }}>
+            Every account opens the same journal — this is one journal with several logins, not separate books. Add or remove accounts in Settings &gt; Security.
+          </p>
+          <div className="stack" style={{ gap: 8 }}>
+            {users.map((u) => (
+              <div key={u.id} className="account-row" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span className="profile-chip">{u.avatar ? <img src={u.avatar} alt="" /> : displayNameOf(u).slice(0, 2).toUpperCase()}</span>
+                <span className="cell-strong">{displayNameOf(u)}</span>
+                <span className="hint mono">@{u.username}</span>
+                {u.id === user.id && <Badge tone="accent">You</Badge>}
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
 // Settings > Security: create the first account (turns the gate on), add more
-// users, or remove them (removing the last turns the gate off). This is the
-// only place accounts are created — the gate itself never self-registers.
-function SecurityPanel({ users, setUsers, currentUser, onAuthenticated }: {
+// users, remove them (removing the last turns the gate off), and decide whether
+// the login screen may create accounts by itself.
+function SecurityPanel({ users, setUsers, currentUser, onAuthenticated, allowSignup = false, setAllowSignup }: {
   users: AuthUser[]; setUsers: Dispatch<SetStateAction<AuthUser[]>>; currentUser?: AuthUser | null; onAuthenticated?: (user: AuthUser) => void;
+  allowSignup?: boolean; setAllowSignup?: (v: boolean) => void;
 }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -4297,11 +5060,23 @@ function SecurityPanel({ users, setUsers, currentUser, onAuthenticated }: {
           ? "No login is set. Create an account to turn on a login gate — after that, opening the app asks for a username and password. This guards the running app, not the files on disk."
           : `The login gate is on. ${users.length} account${users.length === 1 ? "" : "s"} can sign in.`}
       </p>
+      {users.length > 0 && setAllowSignup && (
+        <label className="checkbox-row" style={{ marginBottom: 14 }}>
+          <input type="checkbox" checked={allowSignup} onChange={(e) => setAllowSignup(e.target.checked)} />
+          <span>
+            Allow sign-up from the login screen
+            <span className="hint" style={{ display: "block", marginTop: 2, lineHeight: 1.5 }}>
+              Off by default, and worth leaving off on your own machine: anyone who can open the app could otherwise create their own account and walk straight past the gate. Turn it on for a shared desk where each person should have their own login. Every account opens the same journal.
+            </span>
+          </span>
+        </label>
+      )}
       {users.length > 0 && (
         <div className="stack" style={{ gap: 8, marginBottom: 16 }}>
           {users.map((u) => (
             <div key={u.id} className="account-row" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <Users size={14} /><span className="cell-strong">{u.username}</span>
+              <Users size={14} /><span className="cell-strong">{displayNameOf(u)}</span>
+              <span className="hint mono">@{u.username}</span>
               {currentUser?.id === u.id && <Badge tone="accent">You</Badge>}
               <button className="btn btn-ghost row-edit-btn" style={{ marginLeft: "auto" }} onClick={() => setRemoveUser(u)} disabled={users.length === 1 && currentUser?.id === u.id ? false : false}>
                 <Trash2 size={12} /> Remove
@@ -4347,6 +5122,11 @@ const NAV = [
   { key: "settings", label: "Settings", icon: SettingsIcon },
   { key: "help", label: "Help", icon: LifeBuoy },
 ];
+/* The Profile tab only exists while someone is signed in — with the gate off
+   there is no user for it to be about. It is appended rather than slotted in so
+   the Ctrl/Cmd+1–9 tab shortcuts keep pointing at the same tabs they always
+   did; the shortcut handler spans whatever this list holds. */
+const PROFILE_NAV = { key: "profile", label: "Profile", icon: Users };
 
 type EditingTrade = (Partial<ComputedTrade> & { screenshots?: ShotDraft[]; _loadingShots?: boolean }) | null;
 interface Toast { id: string; message: string; tone?: string; actionLabel?: string; duration?: number; onAction?: () => void; }
@@ -4369,6 +5149,11 @@ function AppShell() {
   const [users, setUsers] = useState<AuthUser[]>([]);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authLoaded, setAuthLoaded] = useState(false);
+  // Whether the login screen offers "Create account". Off by default and
+  // deliberately so: a gate anyone can register past is not a gate. The owner
+  // turns it on in Settings > Security when the machine is shared with people
+  // who should each get their own login.
+  const [allowSignup, setAllowSignup] = useState(false);
   const [tab, setTabState] = useState("dashboard");
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<EditingTrade>(null);
@@ -4569,7 +5354,10 @@ function AppShell() {
       try {
         const res = await storage.get(AUTH_KEY, false);
         const parsed = res?.value ? JSON.parse(res.value) : null;
-        if (mounted && parsed) setUsers(normalizeUsers(parsed.users));
+        if (mounted && parsed) {
+          setUsers(normalizeUsers(parsed.users));
+          setAllowSignup(parsed.allowSignup === true);
+        }
       } catch (e) { console.error("Could not read auth store", e); }
       if (mounted) setAuthLoaded(true);
     })();
@@ -4577,12 +5365,39 @@ function AppShell() {
   }, []);
   // Persist the user store when it changes (after the initial load, so the empty
   // seed never overwrites a real store). A removed last user turns the gate off.
+  // `allowSignup` lives here rather than in settings on purpose: it is a gate
+  // policy, and the meta blob is what a journal backup carries — restoring
+  // someone else's backup must not be able to switch self-signup on.
   const authWrittenRef = useRef(false);
   useEffect(() => {
     if (!authLoaded) return;
     if (!authWrittenRef.current) { authWrittenRef.current = true; return; }
-    storage.set(AUTH_KEY, JSON.stringify({ users: normalizeUsers(users) }), false).catch((e) => console.error("Auth save failed", e));
-  }, [users, authLoaded]);
+    storage.set(AUTH_KEY, JSON.stringify({ users: normalizeUsers(users), allowSignup }), false).catch((e) => console.error("Auth save failed", e));
+  }, [users, allowSignup, authLoaded]);
+
+  // Signed-in state, derived rather than stored: if the session's user is
+  // removed from the store, this recomputes to false and the gate returns —
+  // no effect needed to clear a stale session. A stale authUser in state is
+  // harmless because nothing reads it directly; everything reads `signedIn`.
+  const signedIn = !!authUser && users.some((u) => u.id === authUser.id);
+  // The sidebar's tabs, plus Profile while there is a user to show one for.
+  const navItems = useMemo(() => (signedIn ? [...NAV, PROFILE_NAV] : NAV), [signedIn]);
+  /* An edit made on the Profile tab has to land in two places at once: the
+     session's user (what the page renders) and the stored list (what survives a
+     reload). Doing both here keeps every profile action a single call. */
+  const updateAuthUser = useCallback((next: AuthUser) => {
+    setAuthUser(next);
+    setUsers((list) => normalizeUsers(list).map((u) => (u.id === next.id ? { ...u, ...next } : u)));
+  }, []);
+  // Signing in stamps lastLoginAt; registering adds the account and signs in.
+  const onAuthenticated = useCallback((user: AuthUser | null) => {
+    setAuthUser(user);
+    if (user) setUsers((list) => normalizeUsers(list).map((u) => (u.id === user.id ? { ...u, lastLoginAt: user.lastLoginAt || u.lastLoginAt } : u)));
+  }, []);
+  const onRegister = useCallback((user: AuthUser) => {
+    setUsers((list) => [...normalizeUsers(list), user]);
+    setAuthUser({ ...user, lastLoginAt: new Date().toISOString() });
+  }, []);
 
   // Meta and trades are saved by separate effects on purpose. Preferences churn
   // constantly — every tab switch and calendar step writes them — and folding
@@ -4645,7 +5460,7 @@ function AppShell() {
       // they aren't state a generic Modal instance carries.
       if ((e.ctrlKey || e.metaKey) && !e.altKey && !typing && !showForm && !viewing && openDialogCount === 0) {
         const n = Number(e.key);
-        if (Number.isInteger(n) && n >= 1 && n <= NAV.length) { e.preventDefault(); setTab(NAV[n - 1].key); }
+        if (Number.isInteger(n) && n >= 1 && n <= navItems.length) { e.preventDefault(); setTab(navItems[n - 1].key); }
       }
       // UI zoom. Allowed while typing on purpose — Ctrl never inserts a
       // character, and browser zoom works mid-form too. preventDefault stops
@@ -4667,7 +5482,9 @@ function AppShell() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [showForm, viewing, showShortcuts, showPalette, toggleSidebar, goHistory, setTab]);
+    // navItems is in here because it grows by one (Profile) at sign-in: without
+    // it the handler keeps a closure over the signed-out list.
+  }, [showForm, viewing, showShortcuts, showPalette, toggleSidebar, goHistory, setTab, navItems]);
 
   /* ---- accounts ----
      Every trade resolves to exactly one account. An id that names no account —
@@ -4685,14 +5502,18 @@ function AppShell() {
   const activeAccountId = activeAccount?.id || "";
   const setActiveAccountId = useCallback((id: string) => setPreferences((p) => ({ ...p, activeAccountId: id })), []);
 
-  const computedTrades = useMemo(
-    () => trades.map((t) => {
+  // One index of the account list per pass instead of a linear find per trade:
+  // this runs over the whole journal every time trades or accounts change, and
+  // a dangling accountId still has to resolve to accounts[0] (see the data
+  // model note — deleting an account must never orphan its trades).
+  const computedTrades = useMemo(() => {
+    const byId = new Map(accounts.map((a) => [a.id, a]));
+    return trades.map((t) => {
       const c = computeTrade(t);
-      const acct = accounts.find((a) => a.id === c.accountId) || accounts[0];
+      const acct = byId.get(c.accountId) || accounts[0];
       return { ...c, accountId: acct.id, _accountName: acct.name };
-    }),
-    [trades, accounts]
-  );
+    });
+  }, [trades, accounts]);
 
   // What the app is looking at: one account, or all of them pooled.
   const scopedTrades = useMemo(
@@ -4910,6 +5731,7 @@ function AppShell() {
     pushToast({ message: `Imported ${newTrades.length} trade${newTrades.length === 1 ? "" : "s"}${where}`, tone: "accent" });
   };
 
+
   /* Everything the command palette can do. Order matters for the idle list —
      with no query it shows the first entries as-is, so the everyday ones lead
      and the twelve theme switches only surface once typed for. Trades are not
@@ -4917,7 +5739,7 @@ function AppShell() {
      and only once there is a query. */
   const paletteActions = [
     { key: "new-trade", label: "New Trade", hint: "Ctrl+N", icon: PlusCircle, haystack: "new trade add log record entry", run: () => { setEditing(null); setSeedTrade(null); setShowForm(true); } },
-    ...NAV.map((n, i) => ({ key: `nav-${n.key}`, label: `Go to ${n.label}`, hint: `Ctrl+${i + 1}`, icon: n.icon, haystack: `go to open ${n.label} tab`, run: () => setTab(n.key) })),
+    ...navItems.map((n, i) => ({ key: `nav-${n.key}`, label: `Go to ${n.label}`, hint: `Ctrl+${i + 1}`, icon: n.icon, haystack: `go to open ${n.label} tab`, run: () => setTab(n.key) })),
     { key: "toggle-sidebar", label: "Toggle Sidebar", hint: "Ctrl+B", icon: PanelLeftClose, haystack: "toggle collapse expand sidebar rail", run: toggleSidebar },
     { key: "toggle-density", label: "Toggle Compact Density", icon: Layers, haystack: "toggle compact comfortable density spacing rows", run: () => setPreferences((p) => ({ ...p, density: p.density === "compact" ? "comfortable" : "compact" })) },
     { key: "shortcuts", label: "Keyboard Shortcuts", hint: "?", icon: Keyboard, haystack: "keyboard shortcuts help keys", run: () => setShowShortcuts(true) },
@@ -4969,11 +5791,6 @@ function AppShell() {
     );
   }
 
-  // Signed-in state, derived rather than stored: if the session's user is
-  // removed from the store, this recomputes to false and the gate returns —
-  // no effect needed to clear a stale session. A stale authUser in state is
-  // harmless because nothing reads it directly; everything reads `signedIn`.
-  const signedIn = !!authUser && users.some((u) => u.id === authUser.id);
 
   // Trades could not be read. Saving is disabled while this is showing, so the
   // journal on disk is left exactly as it is rather than being overwritten by an
@@ -5004,7 +5821,7 @@ function AppShell() {
         <style>{APP_CSS}</style>
         <style>{themeCss}</style>
         {accentCss && <style>{accentCss}</style>}
-        <AuthGate users={users} journalName={journalName} onAuthenticated={setAuthUser} />
+        <AuthGate users={users} journalName={journalName} onAuthenticated={onAuthenticated} onRegister={onRegister} allowSignup={allowSignup} />
       </div>
     );
   }
@@ -5021,9 +5838,14 @@ function AppShell() {
 
       <MobileNav title={journalName} />
 
-      <aside className={`sidebar ${sidebarCollapsed ? "sidebar-collapsed" : ""}`} id="app-sidebar">
+      {/* Ten nav buttons sit between the top of the tab order and the page a
+          keyboard user actually came for; this jumps past them. Visible only
+          while focused (see .skip-link), so it costs the mouse user nothing. */}
+      <a className="skip-link" href="#app-content">Skip to content</a>
+
+      <aside className={`sidebar ${sidebarCollapsed ? "sidebar-collapsed" : ""}`} id="app-sidebar" aria-label="Sections">
         <div className="brand"><ProfileMark size={30} settings={settings} setSettings={setSettings} /><div className="brand-labels"><div className="brand-text">{journalName}</div><div className="brand-sub">{journalTagline}</div></div></div>
-        {NAV.map((n) => (
+        {navItems.map((n) => (
           // title/aria-label carry the name when collapsed, where the icon is
           // the only visible affordance.
           <button
@@ -5054,7 +5876,7 @@ function AppShell() {
               <button className="icon-btn icon-btn-min" onClick={() => goHistory(1)} disabled={!canGoForward} title="Forward (Alt+→)" aria-label="Forward"><ArrowRight size={15} /></button>
             </div>
             <div>
-              <h2>{NAV.find((n) => n.key === tab)?.label}</h2>
+              <h2>{navItems.find((n) => n.key === tab)?.label}</h2>
               <div className="topbar-sub">
                 {tab === "dashboard" && "Your trading performance at a glance"}
                 {/* Counts what the filters are narrowing, which is the account
@@ -5089,14 +5911,25 @@ function AppShell() {
             </div>
           )}
           <button className="btn btn-primary" onClick={() => { setEditing(null); setSeedTrade(null); setShowForm(true); }}><PlusCircle size={15} /> New Trade</button>
-          {signedIn && (
-            <button className="icon-btn icon-btn-min" title={`Sign out (${authUser.username})`} aria-label={`Sign out ${authUser.username}`} onClick={() => setAuthUser(null)}><LogOut size={16} /></button>
+          {signedIn && authUser && (
+            <>
+              {/* The signed-in chip is the way to the Profile tab — a name in a
+                  corner that isn't clickable is the usual complaint. */}
+              <button
+                className="user-chip" onClick={() => setTab("profile")}
+                title={`Signed in as ${displayNameOf(authUser)} — open profile`} aria-label={`Open profile for ${displayNameOf(authUser)}`}
+              >
+                <span className="user-chip-avatar">{authUser.avatar ? <img src={authUser.avatar} alt="" /> : displayNameOf(authUser).slice(0, 2).toUpperCase()}</span>
+                <span className="user-chip-name">{displayNameOf(authUser)}</span>
+              </button>
+              <button className="icon-btn icon-btn-min" title={`Sign out (${displayNameOf(authUser)})`} aria-label={`Sign out ${displayNameOf(authUser)}`} onClick={() => setAuthUser(null)}><LogOut size={16} /></button>
+            </>
           )}
         </div>
 
         <TickerStrip items={tickerItems} />
 
-        <div className="content-scroll">
+        <main className="content-scroll" id="app-content" tabIndex={-1}>
           <div className="content-inner">
           {/* The dashboard is the account's headline, not a filtered view: it
               sits directly under a ticker built from scopedTrades, and the two
@@ -5144,12 +5977,19 @@ function AppShell() {
           {tab === "cashflow" && <CashflowPanel settings={settings} setSettings={setSettings} accounts={accounts} activeAccountId={activeAccountId} startingBalance={startingBalance} tradesNet={overall.net} onToast={pushToast} />}
           {tab === "reports" && <ReportsPanel allTrades={scopedTrades} filteredTrades={filtered} filtersActive={filtersActive} settings={scopedSettings} scopeLabel={activeAccount?.name || (accounts.length > 1 ? "All Accounts" : "")} onToast={pushToast} />}
           {tab === "help" && <HelpPanel settings={settings} />}
+          {tab === "profile" && signedIn && authUser && (
+            <ProfilePanel
+              user={authUser} users={users} onUpdateUser={updateAuthUser} onSignOut={() => setAuthUser(null)}
+              onToast={pushToast} tradeCount={scopedTrades.length} journalName={journalName}
+            />
+          )}
           {tab === "settings" && (
             <SettingsPanel
               settings={settings} setSettings={setSettings} trades={computedTrades} theme={theme} setTheme={setTheme}
               strategies={strategies} onImportTrades={importTrades}
               activeAccountId={activeAccountId} setActiveAccountId={setActiveAccountId}
-              users={users} setUsers={setUsers} currentUser={signedIn ? authUser : null} onAuthenticated={setAuthUser}
+              users={users} setUsers={setUsers} currentUser={signedIn ? authUser : null} onAuthenticated={onAuthenticated}
+              allowSignup={allowSignup} setAllowSignup={setAllowSignup}
               preferences={preferences} setPreferences={setPreferences}
               replaceAllData={async (s: Settings, t: Trade[], strat: string[]) => {
                 // mergeSettings: a restored backup can predate accounts entirely,
@@ -5175,7 +6015,7 @@ function AppShell() {
             />
           )}
           </div>
-        </div>
+        </main>
       </div>
 
       {showForm && (
@@ -5239,11 +6079,14 @@ export default function App() {
    delete); those get a longer dwell before auto-dismiss, set where they are
    pushed. Dismissing runs the same removal the timer would. */
 function ToastHost({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: string) => void }) {
-  if (!toasts.length) return null;
+  // The host is the live region, and it stays mounted whether or not anything
+  // is showing: a region that appears at the same moment its text does is not
+  // reliably announced — the reader has to be watching the region already. The
+  // toasts themselves are therefore plain divs, so nothing is announced twice.
   return (
-    <div className="toast-host">
+    <div className="toast-host" role="status" aria-live="polite">
       {toasts.map((t) => (
-        <div key={t.id} className={`toast toast-${t.tone || "accent"}`} role="status">
+        <div key={t.id} className={`toast toast-${t.tone || "accent"}`}>
           <span className="toast-msg">{t.message}</span>
           {t.actionLabel && (
             <button className="toast-action" onClick={() => { t.onAction?.(); onDismiss(t.id); }}>{t.actionLabel}</button>

@@ -5,6 +5,75 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Interactive HTML report** (Reports tab): one self-contained file — KPI
+  strip, charts, and a trade table that searches, filters by direction /
+  result / strategy, and sorts, with a count strip that re-totals net P&L
+  and win rate over whatever is showing. No network, no libraries, opens
+  offline in any browser.
+- **Charts in every exported report**: equity curve, P&L by month, P&L by
+  strategy, win/loss split. Built as plain SVG/HTML strings by the new
+  `lib/reportchart.ts` + `lib/report.ts` — Recharts needs a live React tree
+  that a file on disk doesn't have. Word gets bars drawn from coloured
+  table cells instead, because its HTML importer drops inline SVG silently.
+- **Searchable timezone picker**: ~400 zones ordered ascending by GMT
+  offset under one sticky `+HH:MM GMT` heading per offset, searchable by
+  city, region or offset (`gmt+5:30` / `+5:30` / `5:30` / `05:30`), with
+  full keyboard support. Replaces the unsearchable ~400-option `<select>`.
+- **Playbook performance**: each strategy's note now sits under its real
+  record — trades, open count, win rate, net P&L, average RR, profit
+  factor, win/loss bar, last close — plus search over names *and* note
+  text, and sorting by trades / net / win rate.
+- Accessibility: skip-to-content link, `<main>`/labelled `<aside>`
+  landmarks, one visible `:focus-visible` ring across the app, sortable
+  table headers reachable by Tab and sortable with Enter/Space, and a
+  permanently-mounted `aria-live` toast region.
+- **Sign-up at the login screen**: the gate now has Sign in / Create account
+  tabs. Self sign-up is **off by default** — a gate anyone can register past
+  protects nothing — and is turned on per journal in Settings > Security for
+  a shared machine. A journal with no accounts yet can always register the
+  first one.
+- **Profile tab** for the signed-in user: photo (or initials), display name,
+  member since, last sign-in, password change and sign out. Opened from the
+  new signed-in chip in the top bar. `displayName`, `avatar` and
+  `lastLoginAt` are additive fields on the stored user record; the username
+  stays fixed, being what every record is keyed to.
+- Trades tab: a **totals row** under the table for whatever the filter
+  selected — trades shown, closed/open split, win rate, net P&L, average
+  expected and actual R — spanning correctly whatever columns are hidden and
+  totalling across pages, not just the visible one. Plus a **chip per active
+  filter** (each removing only its own narrowing), a **sticky header**, and
+  **how long each open trade has been open** beside its Open badge.
+- Calendar: a week-total column beside every row of the monthly grid, best
+  and worst day (each opening that day's trades), green-vs-red day counts,
+  average per trading day, a Today jump, a heat-scale legend, drill-down
+  from a month in the yearly grid, and a click on a day with no trades now
+  opens its note instead of doing nothing.
+
+### Changed
+- Timezone offsets read `+05:30 GMT` (offset first) everywhere in the
+  picker, so the grouped list lines up on the sign and climbs +01:00 →
+  +01:30 → +02:00.
+- The timezone list is anchored to the viewport and flips above the field
+  when there is no room below — inside the scrolling settings pane it was
+  being clipped mid-option.
+- Trades-table selection lookups go through a `Set` rather than repeated
+  array `includes`, and the root's account resolution through a `Map` —
+  both were O(rows × selection/accounts) on every render.
+
+### Tests
+376 passing (up from 248): the report chart primitives and report documents
+(including the exported page's own script, driven in jsdom), the display
+formatters, the timezone picker's ordering/search/grouping,
+`strategyPerformance`, `dayBreakdown`, `describeFilters`, the trades-table
+totals row, the auth profile fields and
+`changePassword`, plus component tests for the picker, the polished Playbook,
+gate sign-up and the Profile tab. Coverage on `src/lib/**` is 100% lines /
+~91% branches. The integration suite raises its own timeout to 20s — under
+`--coverage` a full app boot can pass vitest's 5s default.
+
 ## [3.4.0] - 2026-07 — cashflow, login gate, help tab, journal grains
 
 ### Added

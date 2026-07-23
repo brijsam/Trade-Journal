@@ -148,6 +148,40 @@ export interface Filters {
   marketType: string; direction: string; strategy: string; result: string;
   rrMin: string; rrMax: string; search: string; tag: string;
 }
+/* The active filters, written out for the chips above the trades table. A
+   collapsed filter panel that only says "Filters (3)" is the reason a trader
+   stares at a short list wondering where their trades went — each chip names
+   one narrowing and carries the patch that undoes just that one.
+
+   `clear` is a patch rather than a key so a filter made of two fields can drop
+   as a unit: clearing a date preset also clears the custom range it was holding,
+   and clearing either end of that range takes the "custom" preset with it —
+   otherwise the panel would sit on "Custom range" with nothing in it. */
+export interface FilterChip { key: string; label: string; clear: Partial<Filters> }
+export function describeFilters(filters: unknown): FilterChip[] {
+  const f = { ...DEFAULT_FILTERS, ...(filters && typeof filters === "object" ? filters as Partial<Filters> : {}) };
+  const chips: FilterChip[] = [];
+  const val = (k: keyof Filters) => String(f[k] ?? "").trim();
+  const push = (key: string, label: string, clear: Partial<Filters>) => chips.push({ key, label, clear });
+
+  if (val("search")) push("search", `Search "${val("search")}"`, { search: "" });
+  if (val("status")) push("status", `${val("status")} trades`, { status: "" });
+  const PRESETS: Record<string, string> = { today: "Today", week: "This week", month: "This month", year: "This year", custom: "Custom range" };
+  if (val("datePreset") && val("datePreset") !== "custom") push("datePreset", PRESETS[val("datePreset")] || val("datePreset"), { datePreset: "", dateFrom: "", dateTo: "" });
+  if (val("dateFrom")) push("dateFrom", `From ${val("dateFrom")}`, { dateFrom: "", datePreset: "" });
+  if (val("dateTo")) push("dateTo", `To ${val("dateTo")}`, { dateTo: "", datePreset: "" });
+  // A "custom" preset with neither end set narrows nothing, so it is not a chip.
+  if (val("datePreset") === "custom" && !val("dateFrom") && !val("dateTo")) push("datePreset", "Custom range", { datePreset: "" });
+  if (val("asset")) push("asset", val("asset"), { asset: "" });
+  if (val("marketType")) push("marketType", val("marketType"), { marketType: "" });
+  if (val("direction")) push("direction", val("direction"), { direction: "" });
+  if (val("strategy")) push("strategy", val("strategy"), { strategy: "" });
+  if (val("result")) push("result", val("result") === "win" ? "Wins only" : val("result") === "loss" ? "Losses only" : val("result"), { result: "" });
+  if (val("tag")) push("tag", `#${val("tag")}`, { tag: "" });
+  if (val("rrMin")) push("rrMin", `RR ≥ ${val("rrMin")}`, { rrMin: "" });
+  if (val("rrMax")) push("rrMax", `RR ≤ ${val("rrMax")}`, { rrMax: "" });
+  return chips;
+}
 export interface CalendarPrefs { view: string; cursor: string; dateFrom: string; dateTo: string; }
 export interface TableSort { key: string; dir: "asc" | "desc"; }
 
@@ -456,6 +490,71 @@ export function tzOffsetLabel(tz: unknown, at: Date = new Date()): string {
   const abs = Math.abs(mins);
   const rem = abs % 60;
   return `GMT${mins < 0 ? "-" : "+"}${Math.floor(abs / 60)}${rem ? `:${pad(rem)}` : ""}`;
+}
+// "+05:30" / "-04:00" — the offset alone, fixed width, minutes always shown.
+export function offsetDigits(mins: number): string {
+  if (!Number.isFinite(mins)) return "";
+  const abs = Math.abs(mins);
+  return `${mins < 0 ? "-" : "+"}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+}
+// "+05:30 GMT" / "-04:00 GMT" — offset first, so a column of these lines up on
+// the sign and reads as an ascending ladder (+01:00 GMT, +01:30 GMT, +02:00
+// GMT…). The picker groups on this. Deliberately not tzOffsetLabel's shape:
+// that one is prose ("GMT+5:30" beside a clock), this one is a sorted column.
+export function offsetLabelPadded(mins: number): string {
+  const digits = offsetDigits(mins);
+  return digits ? `${digits} GMT` : "";
+}
+/* ---- Timezone picker options --------------------------------------------
+   The Settings picker is built from the runtime's IANA list (~400 entries), so
+   the shaping is pure and testable here rather than inline in a component.
+   Ascending by offset with the zone id as the tiebreak: a trader hunting
+   "somewhere at GMT+02:00" reads one contiguous block. `city`/`region` are the
+   split id, kept as their own fields so search can match "kolkata" without the
+   caller re-splitting on every keystroke. */
+export interface TimezoneOption { id: string; mins: number; offset: string; label: string; region: string; city: string; search: string }
+export function timezoneOptions(zones: unknown, at: Date = new Date()): TimezoneOption[] {
+  return (Array.isArray(zones) ? zones : [])
+    .filter((z): z is string => typeof z === "string" && !!z)
+    .map((id) => {
+      const mins = tzOffsetMinutes(id, at);
+      const cut = id.lastIndexOf("/");
+      const region = cut > 0 ? id.slice(0, cut) : "";
+      const city = (cut > 0 ? id.slice(cut + 1) : id).replace(/_/g, " ");
+      const offset = offsetDigits(mins);
+      return { id, mins, offset, label: offsetLabelPadded(mins), region, city, search: `${id.replace(/_/g, " ")} ${offset} gmt`.toLowerCase() };
+    })
+    .filter((o) => Number.isFinite(o.mins))
+    .sort((a, b) => (a.mins - b.mins) || a.id.localeCompare(b.id));
+}
+/* Free-text search over the options above. Every whitespace-separated term must
+   match somewhere in the id or the offset (AND, not OR), so "asia 05:30" and
+   "new york" both narrow the way a typist expects. The offset can be written
+   any of the ways a trader writes it — "+5:30", "gmt+5:30", "5:30", "05:30" —
+   matched against the padded form with the leading zero optional. */
+export function filterTimezoneOptions(options: TimezoneOption[], query: unknown): TimezoneOption[] {
+  const terms = String(query ?? "").toLowerCase().trim().split(/\s+/).filter(Boolean);
+  if (!terms.length) return options;
+  return options.filter((o) => terms.every((term) => {
+    if (o.search.includes(term)) return true;
+    // An unsigned term matches either side of the meridian; a signed one does not.
+    const m = term.match(/^(?:gmt)?([+-]?)(\d{1,2})(?::(\d{2}))?$/);
+    if (!m) return false;
+    const [, sign, hh, mm] = m;
+    const body = `${pad(Number(hh))}:${mm || ""}`;
+    return sign ? o.offset.startsWith(`${sign}${body}`) : o.offset.startsWith(`+${body}`) || o.offset.startsWith(`-${body}`);
+  }));
+}
+/* Options bucketed by offset, in the same ascending order — one group per
+   distinct offset, which is what the picker renders its sticky headings from. */
+export function groupTimezoneOptions(options: TimezoneOption[]): { mins: number; label: string; zones: TimezoneOption[] }[] {
+  const out: { mins: number; label: string; zones: TimezoneOption[] }[] = [];
+  options.forEach((o) => {
+    const last = out[out.length - 1];
+    if (last && last.mins === o.mins) last.zones.push(o);
+    else out.push({ mins: o.mins, label: o.label, zones: [o] });
+  });
+  return out;
 }
 /* Coerce whatever is on file into a usable account list. Anything that reaches
    here can be from a journal older than accounts, a hand-edited backup, or a
@@ -1153,6 +1252,51 @@ export function summarize(list: ComputedTrade[]): SummaryStats {
   const avgPnlPercent = pnlPercents.length ? pnlPercents.reduce((s, v) => s + v, 0) / pnlPercents.length : null;
   const profitFactor = grossLossAbs !== 0 ? grossProfit / grossLossAbs : (grossProfit > 0 ? Infinity : null);
   return { count: closed.length, wins: wins.length, losses: losses.length, winRate, net, grossProfit, grossLoss, grossLossAbs, avgRR, avgPnlPercent, profitFactor };
+}
+/* Per-strategy performance for the Playbook: one row per name in `strategies`,
+   in the order given, so a strategy with no trades yet still gets a row (its
+   note is the point of the tab — the stats are what the note is judged
+   against). `total` counts every trade tagged with the strategy, open ones
+   included; `stats` is the usual summarize() over the closed ones only, which
+   is why stats.count can be lower. A trade tagged with a strategy that has
+   since been removed from the list is not silently folded into another row —
+   it simply has no row, the same way its note survives unattached. */
+export interface StrategyRow { strategy: string; total: number; open: number; lastExit: string; stats: SummaryStats }
+export function strategyPerformance(trades: ComputedTrade[], strategies: string[]): StrategyRow[] {
+  const byStrategy: Record<string, ComputedTrade[]> = {};
+  trades.forEach((t) => {
+    if (!t.strategy) return;
+    (byStrategy[t.strategy] || (byStrategy[t.strategy] = [])).push(t);
+  });
+  return (Array.isArray(strategies) ? strategies : []).map((strategy) => {
+    const list = byStrategy[strategy] || [];
+    return {
+      strategy,
+      total: list.length,
+      open: list.filter((t) => t.status !== "Closed").length,
+      lastExit: list.reduce((latest, t) => (t.exitDateTime && t.exitDateTime > latest ? t.exitDateTime : latest), ""),
+      stats: summarize(list),
+    };
+  });
+}
+/* The calendar's day map read as a whole: which day was best, which was worst,
+   and how the days split green/red/flat. Days are the unit a trader actually
+   manages risk in — "eleven green days against four red" says something the
+   per-trade win rate doesn't. Takes the map the calendar already builds
+   (key → { pnl, count }) rather than the trades, so the two can never disagree
+   about what fell on which day. */
+export interface DayTally { key: string; pnl: number; count: number }
+export interface DayBreakdown { best: DayTally | null; worst: DayTally | null; green: number; red: number; flat: number; tradedDays: number; avgDay: number | null }
+export function dayBreakdown(byDay: Record<string, { pnl: number; count: number }>): DayBreakdown {
+  const days = Object.entries(byDay || {}).map(([key, v]) => ({ key, pnl: v.pnl, count: v.count }));
+  if (!days.length) return { best: null, worst: null, green: 0, red: 0, flat: 0, tradedDays: 0, avgDay: null };
+  // Ties break on the earlier day: the first time a number was hit is the one
+  // worth looking at, not whichever happened to sort last.
+  const best = days.reduce((a, b) => (b.pnl > a.pnl ? b : a));
+  const worst = days.reduce((a, b) => (b.pnl < a.pnl ? b : a));
+  const green = days.filter((d) => d.pnl > 0).length;
+  const red = days.filter((d) => d.pnl < 0).length;
+  return { best, worst, green, red, flat: days.length - green - red, tradedDays: days.length, avgDay: days.reduce((s, d) => s + d.pnl, 0) / days.length };
 }
 export interface EquityPoint { date: string; balance: number; ts: number; }
 export function equityCurve(trades: ComputedTrade[], startingBalance: number): EquityPoint[] {
